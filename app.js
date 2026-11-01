@@ -1,6 +1,6 @@
 /* =====================================================================
    Receitas na mão · app.js
-   Versão 4 (Entrega 1): login Google, cadastro manual de receita com
+   Versão 5 (Entrega 2): login Google, cadastro manual de receita com
    foto, utensílios e observações, lista, detalhe, edição e exclusão.
 
    REGRA DE SEGURANÇA (XSS): todo texto de receita é colocado na tela
@@ -20,13 +20,13 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '4';
+const VERSAO = '5';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
 const LIMITE_IMAGEM = 150 * 1024; // 150 KB
 const CATEGORIAS_INICIAIS = ['Massas', 'Carne de rês', 'Frango', 'Frutos do mar', 'Japonês e Chinês', 'Salgados',
-  'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Outras'];
+  'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Bebidas', 'Outras'];
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA, {
   auth: {
@@ -41,7 +41,8 @@ const estado = {
   usuario: null,
   categorias: [],
   etiquetas: [],
-  urlsAssinadas: new Map() // caminho da imagem -> { url, expira }
+  urlsAssinadas: new Map(), // caminho da imagem -> { url, expira }
+  importacao: null          // receitas lidas pela IA aguardando revisão
 };
 
 const app = document.getElementById('app');
@@ -401,14 +402,22 @@ async function excluirReceita(r) {
 // Formulário de receita (nova ou edição)
 // ---------------------------------------------------------------------
 
-async function telaFormulario(id) {
+/**
+ * Formulário de receita. Três usos:
+ *  - nova receita manual: telaFormulario(null)
+ *  - edição: telaFormulario(id)
+ *  - revisão do que a IA leu: telaFormulario(null, revisao), onde revisao traz
+ *    { dados, candidatos: [{ blob, url }], capaIndice, aviso, duvidosos,
+ *      posicao, total, aoSalvar(id), aoDescartar() }
+ */
+async function telaFormulario(id, revisao = null) {
   mensagem('Carregando…');
-  let r = null;
+  let r = revisao ? revisao.dados : null;
   if (id) {
     try { r = await buscarReceitaCompleta(id); } catch (e) { return mensagem(erroAmigavel(e), 'erro'); }
     if (!r) return mensagem('Receita não encontrada.', 'erro');
   }
-  const idReceita = r ? r.id : crypto.randomUUID();
+  const idReceita = r?.id || crypto.randomUUID();
   let fotoNova = null;          // Blob comprimido
   let removerFoto = false;
   let urlPrevia = null;
@@ -440,9 +449,7 @@ async function telaFormulario(id) {
     previa.replaceChildren(url ? el('img', { src: url, alt: 'Prévia da foto' }) : el('span', { class: 'aviso', text: 'Sem foto' }));
     botaoRemoverFoto.hidden = !url;
   }
-  entradaFoto.addEventListener('change', async () => {
-    const arquivo = entradaFoto.files[0];
-    if (!arquivo) return;
+  async function usarFoto(arquivo) {
     statusFoto.textContent = 'Reduzindo a foto…';
     try {
       fotoNova = await comprimirImagem(arquivo);
@@ -455,7 +462,27 @@ async function telaFormulario(id) {
       statusFoto.textContent = erroAmigavel(e);
     }
     desenharPrevia();
-  });
+  }
+  entradaFoto.addEventListener('change', () => { if (entradaFoto.files[0]) usarFoto(entradaFoto.files[0]); });
+
+  // Revisão: miniaturas das imagens e quadros do vídeo para escolher a capa.
+  const escolhaCapa = el('div', { class: 'candidatos' });
+  if (revisao?.candidatos?.length) {
+    revisao.candidatos.forEach((c, i) => {
+      escolhaCapa.append(el('button', {
+        class: 'candidato', type: 'button', 'aria-label': `Usar imagem ${i + 1} como capa`,
+        onclick: (ev) => {
+          escolhaCapa.querySelectorAll('.candidato').forEach(b => b.classList.remove('escolhido'));
+          ev.currentTarget.classList.add('escolhido');
+          usarFoto(c.blob);
+        }
+      }, el('img', { src: c.url, alt: '' })));
+    });
+    const inicial = Number.isInteger(revisao.capaIndice) ? revisao.capaIndice : 0;
+    const botaoInicial = escolhaCapa.children[Math.min(inicial, revisao.candidatos.length - 1)];
+    botaoInicial.classList.add('escolhido');
+    usarFoto(revisao.candidatos[Math.min(inicial, revisao.candidatos.length - 1)].blob);
+  }
   botaoRemoverFoto.addEventListener('click', () => {
     fotoNova = null; removerFoto = true; entradaFoto.value = ''; statusFoto.textContent = '';
     desenharPrevia();
@@ -464,7 +491,7 @@ async function telaFormulario(id) {
   // Ingredientes: linhas de ingrediente e de grupo (ex.: "Recheio").
   const listaIngredientes = el('div');
   function linhaIngrediente(i = {}) {
-    const linha = el('div', { class: 'linha-ingrediente', 'data-tipo': 'ing' },
+    const linha = el('div', { class: 'linha-ingrediente', 'data-tipo': 'ing', 'data-original': i.texto_original || null },
       el('input', { type: 'text', inputmode: 'decimal', placeholder: 'Qtd', 'aria-label': 'Quantidade',
         value: i.quantidade !== null && i.quantidade !== undefined ? formatarNumero(i.quantidade) : '' }),
       el('input', { type: 'text', placeholder: 'Unid.', maxlength: 30, 'aria-label': 'Unidade', value: i.unidade || '' }),
@@ -540,7 +567,8 @@ async function telaFormulario(id) {
       if (!nome) { erros.push('Há ingrediente sem nome.'); continue; }
       const qtd = lerQuantidade(qtdTexto);
       if (Number.isNaN(qtd)) { erros.push(`Quantidade inválida em "${nome}". Use 2, 0,5 ou 1/2.`); continue; }
-      ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: campos[1].value.trim(), nome });
+      ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: campos[1].value.trim(), nome,
+        texto_original: linha.dataset.original || null });
     }
     const passos = [...listaPassos.querySelectorAll('textarea')].map(t => t.value.trim()).filter(Boolean);
     const utensilios = [...listaUtensilios.querySelectorAll('input')].map(i => i.value.trim()).filter(Boolean);
@@ -583,7 +611,8 @@ async function telaFormulario(id) {
       // Foto antiga substituída ou removida: apaga do armazenamento.
       if (caminhoAntigo && caminhoAntigo !== caminhoImagem) await sb.storage.from(PASTA_IMAGENS).remove([caminhoAntigo]);
       if (urlPrevia) URL.revokeObjectURL(urlPrevia);
-      location.hash = `#/receita/${idReceita}`;
+      if (revisao) revisao.aoSalvar(idReceita);
+      else location.hash = `#/receita/${idReceita}`;
     } catch (e) {
       status.className = 'status erro';
       status.textContent = 'Não salvou: ' + erroAmigavel(e);
@@ -591,13 +620,25 @@ async function telaFormulario(id) {
     }
   });
 
+  const avisosIA = revisao ? el('div', { class: 'caixa-aviso' },
+    el('strong', { text: 'Leitura da IA: confira antes de salvar.' }),
+    revisao.aviso ? el('p', { text: revisao.aviso }) : null,
+    revisao.duvidosos?.length ? el('p', {}, 'Não encontrei com certeza: ', revisao.duvidosos.join('; ') + '.') : null,
+    el('div', { class: 'acoes' },
+      el('button', { class: 'botao pequeno perigo', type: 'button', onclick: () => revisao.aoDescartar() },
+        revisao.total > 1 ? 'Descartar esta receita' : 'Descartar'))) : null;
+
   mostrar(el('section', {},
-    el('p', {}, el('a', { href: r ? `#/receita/${r.id}` : '#/' }, '← Cancelar')),
-    el('h1', { text: r ? 'Editar receita' : 'Nova receita' }),
-    el('div', { class: 'campo' }, el('span', { text: 'Foto' }), previa, el('div', { class: 'acoes' }, entradaFoto, botaoRemoverFoto), statusFoto),
+    el('p', {}, el('a', { href: revisao ? '#/nova' : (r?.id ? `#/receita/${r.id}` : '#/') }, revisao ? '← Nova importação' : '← Cancelar')),
+    el('h1', { text: revisao ? `Revisar receita${revisao.total > 1 ? ` (${revisao.posicao} de ${revisao.total})` : ''}` : (r ? 'Editar receita' : 'Nova receita') }),
+    avisosIA,
+    el('div', { class: 'campo' }, el('span', { text: 'Foto' }),
+      revisao?.candidatos?.length ? el('small', { class: 'ajuda', text: 'Toque numa imagem para escolher a capa.' }) : null,
+      revisao?.candidatos?.length ? escolhaCapa : null,
+      previa, el('div', { class: 'acoes' }, entradaFoto, botaoRemoverFoto), statusFoto),
     campo('Título', titulo),
-    campo('Categoria', categoria),
-    campo('Etiquetas', etiquetas, 'separadas por vírgula'),
+    campo('Categoria', categoria, revisao ? 'sugerida pela IA' : null),
+    campo('Etiquetas', etiquetas, revisao ? 'sugeridas pela IA, separadas por vírgula' : 'separadas por vírgula'),
     el('div', { class: 'linha-campos' },
       campo('Porções', porcoes), campo('Preparo', tempoPreparo, 'min'), campo('Total', tempoTotal, 'min')),
     el('h2', { text: 'Ingredientes' }),
@@ -622,6 +663,261 @@ async function telaFormulario(id) {
     status
   ));
   desenharPrevia();
+}
+
+// ---------------------------------------------------------------------
+// Importação com IA (Entrega 2): legenda, prints e vídeo, juntos ou não.
+// O aparelho prepara tudo (reduz imagens, tira quadros e áudio do vídeo)
+// e a Edge Function "importar-receita" conversa com a IA.
+// O vídeo em si nunca sai do aparelho.
+// ---------------------------------------------------------------------
+const LIMITE_VIDEO_S = 300;      // 5 minutos (decisão de 01/11/2026)
+const MAX_PRINTS = 10;
+const TAXA_AUDIO = 8000;         // 8 kHz mono: suficiente para fala
+
+function blobParaBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(String(leitor.result).split(',')[1]);
+    leitor.onerror = () => reject(new Error('Não consegui ler o arquivo'));
+    leitor.readAsDataURL(blob);
+  });
+}
+
+/** Reduz uma imagem para enviar à IA (lado maior até ladoMax, JPEG). */
+async function reduzirImagem(fonte, ladoMax, qualidade) {
+  const img = fonte instanceof Blob ? await carregarImagem(fonte) : fonte;
+  const largura = img.videoWidth || img.width, altura = img.videoHeight || img.height;
+  const escala = Math.min(1, ladoMax / Math.max(largura, altura));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(largura * escala);
+  canvas.height = Math.round(altura * escala);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', qualidade));
+  if (!blob) throw new Error('Não consegui preparar a imagem');
+  return blob;
+}
+
+function esperarEvento(alvo, evento, msTempo, mensagemErro) {
+  return new Promise((resolve, reject) => {
+    const tempo = setTimeout(() => { limpar(); reject(new Error(mensagemErro)); }, msTempo);
+    const ok = () => { limpar(); resolve(); };
+    const falha = () => { limpar(); reject(new Error(mensagemErro)); };
+    function limpar() { clearTimeout(tempo); alvo.removeEventListener(evento, ok); alvo.removeEventListener('error', falha); }
+    alvo.addEventListener(evento, ok, { once: true });
+    alvo.addEventListener('error', falha, { once: true });
+  });
+}
+
+/** Lê a duração e tira quadros do vídeo (até 30, espalhados). */
+async function quadrosDoVideo(arquivo, aoProgredir) {
+  const url = URL.createObjectURL(arquivo);
+  const video = document.createElement('video');
+  video.muted = true; video.playsInline = true; video.preload = 'auto';
+  video.setAttribute('playsinline', ''); video.setAttribute('muted', '');
+  video.src = url;
+  try {
+    await esperarEvento(video, 'loadeddata', 20000, 'Não consegui abrir o vídeo neste aparelho.');
+    const duracao = video.duration;
+    if (!Number.isFinite(duracao) || duracao <= 0) throw new Error('Não consegui ler a duração do vídeo.');
+    if (duracao > LIMITE_VIDEO_S + 0.5) {
+      throw new Error(`O vídeo tem ${Math.floor(duracao / 60)} min ${Math.round(duracao % 60)} s. O limite é de 5 minutos.`);
+    }
+    const intervalo = Math.max(4, Math.round(duracao / 30));
+    const quadros = [];
+    for (let t = Math.min(1, duracao / 2); t < duracao && quadros.length < 30; t += intervalo) {
+      video.currentTime = t;
+      await esperarEvento(video, 'seeked', 8000, 'Não consegui tirar imagens do vídeo.');
+      quadros.push(await reduzirImagem(video, 720, 0.7));
+      aoProgredir?.(`Tirando imagens do vídeo: ${quadros.length}`);
+    }
+    return { duracao, intervalo, quadros };
+  } finally {
+    video.removeAttribute('src'); video.load();
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Extrai o áudio do vídeo em mono 8 kHz e devolve um arquivo WAV. */
+async function audioDoVideo(arquivo, duracao) {
+  const Contexto = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!Contexto) throw new Error('Este navegador não extrai áudio.');
+  const dados = await arquivo.arrayBuffer();
+  const ctx = new Contexto(1, Math.ceil(TAXA_AUDIO * (duracao + 1)), TAXA_AUDIO);
+  const buffer = await new Promise((resolve, reject) => {
+    const p = ctx.decodeAudioData(dados, resolve, reject);
+    if (p && p.then) p.then(resolve, reject);
+  });
+  // Junta os canais em um (mono)
+  const n = buffer.length, canais = buffer.numberOfChannels;
+  const mono = new Float32Array(n);
+  for (let c = 0; c < canais; c++) {
+    const d = buffer.getChannelData(c);
+    for (let i = 0; i < n; i++) mono[i] += d[i] / canais;
+  }
+  // Monta o WAV (PCM 16 bits)
+  const taxa = buffer.sampleRate;
+  const wav = new DataView(new ArrayBuffer(44 + n * 2));
+  const escrever = (pos, txt) => { for (let i = 0; i < txt.length; i++) wav.setUint8(pos + i, txt.charCodeAt(i)); };
+  escrever(0, 'RIFF'); wav.setUint32(4, 36 + n * 2, true); escrever(8, 'WAVE');
+  escrever(12, 'fmt '); wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+  wav.setUint32(24, taxa, true); wav.setUint32(28, taxa * 2, true); wav.setUint16(32, 2, true); wav.setUint16(34, 16, true);
+  escrever(36, 'data'); wav.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, mono[i]));
+    wav.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+  }
+  // Áudio todo em silêncio (vídeo sem som): não vale enviar.
+  let pico = 0;
+  for (let i = 0; i < n; i += 50) pico = Math.max(pico, Math.abs(mono[i]));
+  return { wav: new Blob([wav], { type: 'audio/wav' }), silencioso: pico < 0.01 };
+}
+
+function telaImportar() {
+  const legenda = el('textarea', { maxlength: 20000, 'aria-label': 'Legenda ou texto da receita',
+    placeholder: 'Cole aqui a legenda do post ou o texto da receita (opcional)' });
+  const entradaImagens = el('input', { type: 'file', accept: 'image/*', multiple: true, 'aria-label': 'Prints ou fotos' });
+  const entradaVideo = el('input', { type: 'file', accept: 'video/*', 'aria-label': 'Vídeo' });
+  const link = el('input', { type: 'url', maxlength: 2000, placeholder: 'https:// (opcional, fica como fonte)', 'aria-label': 'Link do post' });
+  const resumo = el('p', { class: 'ajuda' });
+  const status = el('div', { class: 'status', role: 'status' });
+  const botao = el('button', { class: 'botao principal', type: 'button' }, 'Ler receita com IA');
+
+  const atualizarResumo = () => {
+    const partes = [];
+    if (legenda.value.trim()) partes.push('legenda');
+    if (entradaImagens.files.length) partes.push(`${entradaImagens.files.length} imagem(ns)`);
+    if (entradaVideo.files.length) partes.push('1 vídeo');
+    resumo.textContent = partes.length ? 'Vai enviar: ' + partes.join(' + ') + '.' : 'Use uma ou mais opções. Vídeo + legenda costuma dar o melhor resultado.';
+  };
+  [legenda, entradaImagens, entradaVideo].forEach(e => e.addEventListener('input', atualizarResumo));
+  entradaImagens.addEventListener('change', atualizarResumo);
+  entradaVideo.addEventListener('change', atualizarResumo);
+  atualizarResumo();
+
+  botao.addEventListener('click', async () => {
+    status.className = 'status';
+    const texto = legenda.value.trim();
+    const imagens = [...entradaImagens.files].slice(0, MAX_PRINTS);
+    const video = entradaVideo.files[0] || null;
+    const linkFonte = link.value.trim();
+    if (!texto && !imagens.length && !video) { status.className = 'status erro'; status.textContent = 'Cole a legenda ou escolha imagens ou um vídeo.'; return; }
+    if (linkFonte && !linkSeguro(linkFonte)) { status.className = 'status erro'; status.textContent = 'Link: use um endereço começando com https://'; return; }
+    if (entradaImagens.files.length > MAX_PRINTS) { status.textContent = `Usando só as ${MAX_PRINTS} primeiras imagens.`; }
+
+    botao.disabled = true;
+    const inicio = Date.now();
+    const relogio = setInterval(() => { botao.textContent = `Lendo… ${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
+    const avisos = [];
+    try {
+      const corpo = { texto, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
+      const candidatos = [];
+      for (const [i, f] of imagens.entries()) {
+        status.textContent = `Preparando imagem ${i + 1} de ${imagens.length}…`;
+        const b = await reduzirImagem(f, 1280, 0.8);
+        corpo.imagens.push({ mime: 'image/jpeg', dados: await blobParaBase64(b) });
+        candidatos.push({ blob: f, url: URL.createObjectURL(b) });
+      }
+      if (video) {
+        status.textContent = 'Abrindo o vídeo…';
+        const v = await quadrosDoVideo(video, t => { status.textContent = t; });
+        corpo.intervalo_quadros_s = v.intervalo;
+        for (const q of v.quadros) {
+          corpo.quadros.push({ mime: 'image/jpeg', dados: await blobParaBase64(q) });
+          candidatos.push({ blob: q, url: URL.createObjectURL(q) });
+        }
+        status.textContent = 'Separando o áudio do vídeo…';
+        try {
+          const a = await audioDoVideo(video, v.duracao);
+          if (a.silencioso) avisos.push('O vídeo não tem fala; a IA usou só as imagens.');
+          else corpo.audio = { mime: 'audio/wav', dados: await blobParaBase64(a.wav) };
+        } catch {
+          avisos.push('Não consegui ler o áudio do vídeo neste aparelho; a IA usou só as imagens.');
+        }
+      }
+      status.textContent = 'A IA está lendo a receita…';
+      const { data } = await sb.auth.getSession();
+      if (!data.session) throw new Error('Sua sessão expirou. Entre de novo.');
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/importar-receita`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session.access_token}`, apikey: SUPABASE_CHAVE_PUBLICA },
+        body: JSON.stringify(corpo)
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(json.erro || `Erro ${resp.status} na importação.`);
+      if (!json.receitas?.length) throw new Error(json.aviso || 'A IA não encontrou receita nesse conteúdo.');
+
+      estado.importacao = {
+        receitas: json.receitas, candidatos, link: linkFonte || null, importacaoId: json.importacao_id,
+        fonteTipo: video ? 'video' : (imagens.length ? 'print' : 'legenda'),
+        aviso: [json.aviso, ...avisos].filter(Boolean).join(' '),
+        prints: imagens.length, indice: 0, ultimaSalva: null
+      };
+      location.hash = '#/revisar';
+    } catch (e) {
+      status.className = 'status erro';
+      status.textContent = erroAmigavel(e);
+    } finally {
+      clearInterval(relogio);
+      botao.disabled = false;
+      botao.textContent = 'Ler receita com IA';
+    }
+  });
+
+  mostrar(el('section', {},
+    el('p', {}, el('a', { href: '#/' }, '← Voltar')),
+    el('h1', { text: 'Nova receita' }),
+    el('p', { class: 'ajuda' }, 'A IA lê a legenda, os prints e o vídeo e monta a receita para você revisar. ',
+      el('a', { href: '#/manual' }, 'Prefere digitar? Cadastro manual')),
+    el('label', { class: 'campo' }, el('span', { text: 'Legenda ou texto' }), legenda),
+    el('label', { class: 'campo' }, el('span', {}, 'Prints ou fotos ', el('small', { text: `até ${MAX_PRINTS}` })), entradaImagens),
+    el('label', { class: 'campo' }, el('span', {}, 'Vídeo ', el('small', { text: 'até 5 minutos; o vídeo não é enviado, só imagens e áudio' })), entradaVideo),
+    el('label', { class: 'campo' }, el('span', { text: 'Link do post' }), link),
+    resumo,
+    el('div', { class: 'acoes' }, botao),
+    status
+  ));
+}
+
+/** Mostra a receita lida pela IA no formulário, uma de cada vez. */
+async function telaRevisao() {
+  const imp = estado.importacao;
+  if (!imp || imp.indice >= imp.receitas.length) { location.hash = '#/nova'; return; }
+  const rec = imp.receitas[imp.indice];
+  const catId = estado.categorias.find(c => c.nome === rec.categoria)?.id || null;
+  // Capa sugerida: a imagem indicada pela IA; num post com várias receitas e
+  // uma imagem por receita, a imagem de mesma posição.
+  let capa = Number.isInteger(rec.indice_imagem_capa) ? rec.indice_imagem_capa - 1 : null;
+  if (capa === null && imp.receitas.length > 1 && imp.prints >= imp.receitas.length) capa = imp.indice;
+  const proxima = () => {
+    imp.indice++;
+    if (imp.indice < imp.receitas.length) telaRevisao();
+    else {
+      imp.candidatos.forEach(c => URL.revokeObjectURL(c.url));
+      estado.importacao = null;
+      location.hash = imp.ultimaSalva ? `#/receita/${imp.ultimaSalva}` : '#/';
+    }
+  };
+  await telaFormulario(null, {
+    dados: {
+      titulo: rec.titulo, categoria_id: catId, etiquetas: rec.etiquetas, porcoes: rec.porcoes,
+      tempo_preparo_min: rec.tempo_preparo_min, tempo_total_min: rec.tempo_total_min,
+      ingredientes: rec.ingredientes.map(i => ({ ...i, nome: i.observacao ? `${i.nome} (${i.observacao})` : i.nome })),
+      passos: rec.passos.map(t => ({ texto: t })), utensilios: rec.utensilios, observacoes: rec.observacoes,
+      fonte_url: imp.link, fonte_autor: rec.autor, fonte_tipo: imp.fonteTipo
+    },
+    candidatos: imp.candidatos, capaIndice: capa,
+    aviso: imp.indice === 0 ? imp.aviso : null, duvidosos: rec.campos_duvidosos,
+    posicao: imp.indice + 1, total: imp.receitas.length,
+    aoSalvar: async (idSalvo) => {
+      if (imp.importacaoId && !imp.ultimaSalva) {
+        await sb.from('importacoes').update({ receita_id: idSalvo }).eq('id', imp.importacaoId);
+      }
+      imp.ultimaSalva = idSalvo;
+      proxima();
+    },
+    aoDescartar: proxima
+  });
 }
 
 function telaAjustes() {
@@ -651,7 +947,9 @@ async function rotear() {
   try {
     if (partes[0] === 'receita' && partes[1]) return await telaReceita(partes[1]);
     if (partes[0] === 'editar' && partes[1]) return await telaFormulario(partes[1]);
-    if (partes[0] === 'nova') return await telaFormulario(null);
+    if (partes[0] === 'nova') return telaImportar();
+    if (partes[0] === 'manual') return await telaFormulario(null);
+    if (partes[0] === 'revisar') return await telaRevisao();
     if (partes[0] === 'ajustes') return telaAjustes();
     return await telaLista();
   } catch (e) {

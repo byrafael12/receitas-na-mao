@@ -1,5 +1,15 @@
 # Histórico de versões
 
+## Versão 5 (01/11/2026), Entrega 2: importação com IA
+
+- **+ Nova** abre a importação: legenda, prints (até 10) e vídeo (até 5 minutos), em qualquer combinação. O aparelho reduz as imagens, tira até 30 quadros e o áudio do vídeo (mono 8 kHz); o vídeo nunca é enviado.
+- Edge Function `importar-receita`: login obrigatório, só aceita o endereço do app, limite de 50 importações por dia, chama o Gemini (`gemini-3.1-flash-lite`) com formato fixo de resposta, limpa e corta a resposta, registra cada importação em `importacoes`.
+- Tela de **Revisão**: campos preenchidos pela IA, aviso do que ela não encontrou com certeza, escolha da capa entre as imagens e quadros, "Descartar". Post com várias receitas: uma revisão por receita.
+- Cadastro manual continua em **Nova receita > Cadastro manual**.
+- Categoria **Bebidas**. Script `supabase/06-importacao-ia.sql`.
+- CSP: `media-src blob:` (leitura do vídeo no aparelho).
+- Testes locais: importação 29 de 29 (arquivos reais), função da IA 29 de 29, interface 25 de 25, lista 12 de 12.
+
 ## Versão 4 (01/11/2026), Entrega 1
 
 - Abas de categoria na tela inicial: "Todas" + só as categorias que têm receitas (e "Sem categoria", se houver), com a contagem; rolam para o lado.

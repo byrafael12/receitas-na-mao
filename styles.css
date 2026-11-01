@@ -158,3 +158,13 @@ textarea { min-height: 72px; resize: vertical; }
 .lista-info span:first-child { color: var(--texto-suave); }
 
 [hidden] { display: none !important; }
+
+/* Importação e revisão (Entrega 2) */
+.ajuda { color: var(--texto-suave); font-size: 0.9rem; }
+.caixa-aviso { border: 1px solid var(--destaque); border-radius: var(--raio); padding: 12px 14px; margin-bottom: 16px; background: var(--superficie); }
+.caixa-aviso p { margin: 6px 0 0; }
+.candidatos { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 8px; scrollbar-width: thin; }
+.candidato { flex: 0 0 auto; width: 64px; height: 64px; padding: 0; border: 2px solid transparent; border-radius: 8px; background: none; cursor: pointer; overflow: hidden; }
+.candidato img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.candidato.escolhido { border-color: var(--destaque); }
+input[type="file"] { max-width: 100%; }
