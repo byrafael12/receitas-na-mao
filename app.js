@@ -1,7 +1,7 @@
 /* =====================================================================
    Receitas na mão · app.js
-   Versão 1 (Entrega 1): login Google, cadastro manual de receita com
-   foto, lista, detalhe, edição e exclusão.
+   Versão 3 (Entrega 1): login Google, cadastro manual de receita com
+   foto, utensílios e observações, lista, detalhe, edição e exclusão.
 
    REGRA DE SEGURANÇA (XSS): todo texto de receita é colocado na tela
    com textContent (via a função el), NUNCA com innerHTML. Assim, se um
@@ -20,12 +20,13 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '1';
+const VERSAO = '3';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
 const LIMITE_IMAGEM = 150 * 1024; // 150 KB
-const CATEGORIAS_INICIAIS = ['Massas', 'Carnes', 'Salgados', 'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Outras'];
+const CATEGORIAS_INICIAIS = ['Massas', 'Carne de rês', 'Frango', 'Frutos do mar', 'Japonês e Chinês', 'Salgados',
+  'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Outras'];
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA, {
   auth: {
@@ -321,9 +322,13 @@ async function telaReceita(id) {
     r.etiquetas.length ? el('div', { class: 'etiquetas' }, r.etiquetas.map(t => el('span', { class: 'etiqueta', text: t }))) : null,
     el('h2', { text: 'Ingredientes' }),
     r.ingredientes.length ? listaIng : el('p', { class: 'aviso', text: 'Sem ingredientes.' }),
+    (r.utensilios || []).length ? el('h2', { text: 'Utensílios' }) : null,
+    (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
     el('h2', { text: 'Modo de preparo' }),
     r.passos.length ? el('ol', { class: 'passos' }, r.passos.map(p => el('li', { text: p.texto })))
       : el('p', { class: 'aviso', text: 'Sem passos.' }),
+    r.observacoes ? el('h2', { text: 'Observações' }) : null,
+    r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
     el('div', { class: 'acoes' },
       el('a', { class: 'botao', href: `#/editar/${r.id}` }, 'Editar'),
@@ -427,6 +432,19 @@ async function telaFormulario(id) {
   }
   if (!r?.ingredientes?.length) listaIngredientes.append(linhaIngrediente(), linhaIngrediente(), linhaIngrediente());
 
+  // Utensílios: um por linha (frigideira, refratário, forma...)
+  const listaUtensilios = el('div');
+  function linhaUtensilio(nome = '') {
+    const linha = el('div', { class: 'linha-grupo' },
+      el('input', { type: 'text', placeholder: 'Ex.: frigideira', maxlength: 60, 'aria-label': 'Utensílio', value: nome }),
+      el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover utensílio', onclick: () => linha.remove() }, '×'));
+    return linha;
+  }
+  for (const u of r?.utensilios || []) listaUtensilios.append(linhaUtensilio(u));
+  if (!r?.utensilios?.length) listaUtensilios.append(linhaUtensilio());
+
+  const observacoes = el('textarea', { maxlength: 3000, 'aria-label': 'Observações', placeholder: 'Dicas, variações, como guardar...' }, r?.observacoes || '');
+
   // Passos numerados
   const listaPassos = el('div');
   function renumerar() {
@@ -472,6 +490,8 @@ async function telaFormulario(id) {
       ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: campos[1].value.trim(), nome });
     }
     const passos = [...listaPassos.querySelectorAll('textarea')].map(t => t.value.trim()).filter(Boolean);
+    const utensilios = [...listaUtensilios.querySelectorAll('input')].map(i => i.value.trim()).filter(Boolean);
+    if (utensilios.length > 30) erros.push('Máximo de 30 utensílios.');
     const listaEtiquetas = etiquetas.value.split(',').map(t => t.trim()).filter(Boolean).slice(0, 15);
     if (listaEtiquetas.some(t => t.length > 40)) erros.push('Cada etiqueta pode ter até 40 letras.');
 
@@ -499,7 +519,8 @@ async function telaFormulario(id) {
           fonte_autor: fonteAutor.value.trim() || null,
           fonte_tipo: r?.fonte_tipo || 'manual',
           favorita: r?.favorita || false,
-          ingredientes, passos, etiquetas: listaEtiquetas
+          ingredientes, passos, etiquetas: listaEtiquetas,
+          utensilios, observacoes: observacoes.value.trim() || null
         }
       });
       if (error) {
@@ -531,10 +552,16 @@ async function telaFormulario(id) {
     el('div', { class: 'acoes' },
       el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaIngredientes.append(linhaIngrediente()) }, '+ Ingrediente'),
       el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaIngredientes.append(linhaGrupo()) }, '+ Grupo')),
+    el('h2', { text: 'Utensílios' }),
+    listaUtensilios,
+    el('div', { class: 'acoes' },
+      el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaUtensilios.append(linhaUtensilio()) }, '+ Utensílio')),
     el('h2', { text: 'Modo de preparo' }),
     listaPassos,
     el('div', { class: 'acoes' },
       el('button', { class: 'botao pequeno', type: 'button', onclick: () => { listaPassos.append(linhaPasso()); renumerar(); } }, '+ Passo')),
+    el('h2', { text: 'Observações' }),
+    observacoes,
     el('h2', { text: 'Fonte' }),
     campo('Link', fonteUrl),
     campo('Autor', fonteAutor),

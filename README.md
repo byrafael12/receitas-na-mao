@@ -15,6 +15,9 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `lib/supabase.js` | Biblioteca supabase-js 2.118.0 servida pelo próprio site (sem CDN), licença MIT em `lib/LICENSE-supabase-js.txt` |
 | `supabase/01-tabelas-e-seguranca.sql` | Tabelas, RLS forçada, função `salvar_receita`, pasta de imagens `capas` |
 | `supabase/02-backup.sql` | Função de backup só de leitura, protegida por chave |
+| `supabase/03-fechar-rls-auto-enable.sql` | Tira de anon e authenticated a execução da função `rls_auto_enable` |
+| `supabase/04-utensilios-observacoes-categorias.sql` | Utensílios, observações e 4 categorias novas |
+| `supabase/05-ajuste-categorias.sql` | Carne de rês; Japonês e Chinês numa só categoria; nova ordem |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
 
 ## Segurança

@@ -108,6 +108,9 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 .quantidade { font-weight: 600; }
 .passos { padding-left: 1.4em; margin: 0; }
 .passos li { padding: 6px 0 10px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.utensilios { padding-left: 1.2em; margin: 0; }
+.utensilios li { padding: 4px 0; overflow-wrap: anywhere; }
+.observacoes { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
 .fonte { margin-top: 24px; font-size: 0.9rem; color: var(--texto-suave); overflow-wrap: anywhere; }
 
 /* Formulário */
