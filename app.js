@@ -1,6 +1,6 @@
 /* =====================================================================
    Receitas na mão · app.js
-   Versão 3 (Entrega 1): login Google, cadastro manual de receita com
+   Versão 4 (Entrega 1): login Google, cadastro manual de receita com
    foto, utensílios e observações, lista, detalhe, edição e exclusão.
 
    REGRA DE SEGURANÇA (XSS): todo texto de receita é colocado na tela
@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '3';
+const VERSAO = '4';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -252,6 +252,15 @@ function telaLogin(erro) {
   ));
 }
 
+// Preferências deste aparelho (visão e categoria escolhidas). Se o
+// navegador não deixar guardar, o app funciona igual, só não lembra.
+function lerPreferencia(chave, padrao) {
+  try { return localStorage.getItem('receitas.' + chave) || padrao; } catch { return padrao; }
+}
+function gravarPreferencia(chave, valor) {
+  try { localStorage.setItem('receitas.' + chave, valor); } catch { /* sem armazenamento */ }
+}
+
 async function telaLista() {
   mensagem('Carregando receitas…');
   const { data, error } = await sb.from('receitas')
@@ -260,24 +269,68 @@ async function telaLista() {
   if (error) return mensagem(erroAmigavel(error), 'erro');
 
   const urls = await urlsDasImagens(data.map(r => r.imagem_caminho));
+  const titulo = el('h1');
   const cabecalho = el('div', { class: 'cabecalho-lista' },
-    el('h1', { text: `Minhas receitas (${data.length})` }),
+    titulo,
     el('a', { class: 'botao principal', href: '#/nova' }, '+ Nova'));
 
   if (!data.length) {
+    titulo.textContent = 'Minhas receitas';
     return mostrar(cabecalho, el('p', { class: 'aviso', text: 'Nenhuma receita ainda. Toque em "+ Nova" para cadastrar a primeira.' }));
   }
 
-  const grade = el('div', { class: 'grade' }, data.map(r => {
-    const info = [nomeCategoria(r.categoria_id), minutosTexto(r.tempo_preparo_min),
-      r.porcoes ? `${formatarNumero(r.porcoes)} porç.` : null].filter(Boolean).join(' · ');
+  // Abas de categoria: "Todas" + só as categorias que têm receitas, com a contagem.
+  const contagem = new Map();
+  for (const r of data) contagem.set(r.categoria_id || 'sem', (contagem.get(r.categoria_id || 'sem') || 0) + 1);
+  const abas = [{ id: 'todas', nome: 'Todas', qtd: data.length }];
+  for (const c of estado.categorias) if (contagem.has(c.id)) abas.push({ id: c.id, nome: c.nome, qtd: contagem.get(c.id) });
+  if (contagem.has('sem')) abas.push({ id: 'sem', nome: 'Sem categoria', qtd: contagem.get('sem') });
+
+  let filtro = lerPreferencia('categoria', 'todas');
+  if (!abas.some(a => a.id === filtro)) filtro = 'todas';
+  let visao = lerPreferencia('visao', 'grade');
+
+  const barraAbas = el('div', { class: 'abas', role: 'tablist', 'aria-label': 'Categorias' });
+  const botoesVisao = el('div', { class: 'alternar-visao', role: 'group', 'aria-label': 'Visão' });
+  const area = el('div');
+
+  function itemGrade(r) {
     return el('a', { class: 'cartao', href: `#/receita/${r.id}` },
       elementoCapa(urls[r.imagem_caminho], ''),
-      el('div', { class: 'cartao-texto' },
+      el('div', { class: 'cartao-texto' }, el('div', { class: 'cartao-titulo', text: r.titulo })));
+  }
+  function itemLista(r) {
+    const info = [nomeCategoria(r.categoria_id), minutosTexto(r.tempo_preparo_min),
+      r.porcoes ? `${formatarNumero(r.porcoes)} porç.` : null].filter(Boolean).join(' · ');
+    return el('a', { class: 'item-lista', href: `#/receita/${r.id}` },
+      elementoCapa(urls[r.imagem_caminho], ''),
+      el('div', { class: 'item-texto' },
         el('div', { class: 'cartao-titulo', text: r.titulo }),
         info ? el('div', { class: 'cartao-info', text: info }) : null));
-  }));
-  mostrar(cabecalho, grade);
+  }
+
+  function desenhar() {
+    const visiveis = data.filter(r => filtro === 'todas' || (r.categoria_id || 'sem') === filtro);
+    const aba = abas.find(a => a.id === filtro);
+    titulo.textContent = filtro === 'todas' ? `Minhas receitas (${data.length})` : `${aba.nome} (${visiveis.length})`;
+    barraAbas.replaceChildren(...abas.map(a => el('button', {
+      class: 'aba' + (a.id === filtro ? ' ativa' : ''), type: 'button', role: 'tab',
+      'aria-selected': a.id === filtro ? 'true' : 'false',
+      onclick: () => { filtro = a.id; gravarPreferencia('categoria', filtro); desenhar(); }
+    }, `${a.nome} `, el('span', { class: 'aba-qtd', text: String(a.qtd) }))));
+    botoesVisao.replaceChildren(
+      el('button', { class: 'botao pequeno' + (visao === 'grade' ? ' selecionado' : ''), type: 'button', 'aria-pressed': visao === 'grade' ? 'true' : 'false',
+        onclick: () => { visao = 'grade'; gravarPreferencia('visao', visao); desenhar(); } }, '▦ Grade'),
+      el('button', { class: 'botao pequeno' + (visao === 'lista' ? ' selecionado' : ''), type: 'button', 'aria-pressed': visao === 'lista' ? 'true' : 'false',
+        onclick: () => { visao = 'lista'; gravarPreferencia('visao', visao); desenhar(); } }, '☰ Lista'));
+    area.replaceChildren(visao === 'lista'
+      ? el('div', { class: 'lista' }, visiveis.map(itemLista))
+      : el('div', { class: 'grade' }, visiveis.map(itemGrade)));
+    barraAbas.querySelector('.ativa')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  mostrar(cabecalho, barraAbas, botoesVisao, area);
+  desenhar();
 }
 
 async function telaReceita(id) {

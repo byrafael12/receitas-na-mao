@@ -1,5 +1,12 @@
 # Histórico de versões
 
+## Versão 4 (01/11/2026), Entrega 1
+
+- Abas de categoria na tela inicial: "Todas" + só as categorias que têm receitas (e "Sem categoria", se houver), com a contagem; rolam para o lado.
+- Visão em **Grade** (3 receitas por linha no celular, 4 no tablet, 5 no notebook; título em até 2 linhas) ou **Lista** (miniatura de 72 px à esquerda, título, categoria, tempo e porções).
+- O app lembra, em cada aparelho, a última categoria e a visão escolhidas.
+- Testes locais: lista e abas 12 de 12; interface 25 de 25.
+
 ## Versão 3 (01/11/2026), Entrega 1
 
 - "Carnes" passa a se chamar "Carne de rês".

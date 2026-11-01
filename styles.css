@@ -82,8 +82,26 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 
 /* Lista */
 .cabecalho-lista { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-@media (min-width: 600px) { .grade { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.grade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (min-width: 600px) { .grade { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; } }
+@media (min-width: 900px) { .grade { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.grade .cartao-texto { padding: 6px 8px 8px; }
+.grade .cartao-titulo { font-size: 0.85rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Abas de categoria (rolam para o lado) */
+.abas { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 10px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.abas::-webkit-scrollbar { display: none; }
+.aba { flex: 0 0 auto; min-height: 36px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font: inherit; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.aba.ativa { background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); font-weight: 600; }
+.aba-qtd { opacity: 0.75; font-size: 0.8rem; }
+.alternar-visao { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 10px; }
+.botao.selecionado { border-color: var(--destaque); color: var(--destaque); }
+
+/* Visão em lista: miniatura à esquerda */
+.lista { display: flex; flex-direction: column; gap: 8px; }
+.item-lista { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: center; padding: 8px; background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio); color: var(--texto); text-decoration: none; box-shadow: var(--sombra); }
+.item-lista .capa { width: 72px; height: 72px; border-radius: 8px; font-size: 1.4rem; }
+.item-lista .cartao-titulo { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cartao {
   display: block; overflow: hidden;
   background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio);
