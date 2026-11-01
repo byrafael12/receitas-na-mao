@@ -20,13 +20,13 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '6';
+const VERSAO = '7';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
 const LIMITE_IMAGEM = 150 * 1024; // 150 KB
 const CATEGORIAS_INICIAIS = ['Massas', 'Carne de rês', 'Frango', 'Frutos do mar', 'Japonês e Chinês', 'Salgados',
-  'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Bebidas', 'Outras'];
+  'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Bebidas e Drinks', 'Outras'];
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA, {
   auth: {
@@ -95,9 +95,25 @@ function formatarNumero(n) {
   return Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 }
 
-/** Converte "1/2", "1 1/2", "0,5" ou "2" em número. Vazio vira null. */
+/** Quantidade em linguagem de cozinha: 0,5 vira "1/2", 1,5 vira "1 1/2",
+ *  0,333 vira "1/3". Valores que não são frações comuns ficam com vírgula. */
+const FRACOES = [[1, 2], [1, 3], [2, 3], [1, 4], [3, 4], [1, 8], [3, 8], [5, 8], [7, 8]];
+function formatarQuantidade(n) {
+  if (n === null || n === undefined || n === '') return '';
+  const v = Number(n);
+  const inteiro = Math.floor(v + 1e-9), resto = v - inteiro;
+  if (resto < 0.01) return String(inteiro);
+  const f = FRACOES.find(([a, b]) => Math.abs(resto - a / b) < 0.01);
+  if (!f) return formatarNumero(v);
+  return (inteiro ? `${inteiro} ` : '') + `${f[0]}/${f[1]}`;
+}
+
+const FRACOES_UNICODE = { '½': ' 1/2', '⅓': ' 1/3', '⅔': ' 2/3', '¼': ' 1/4', '¾': ' 3/4', '⅛': ' 1/8', '⅜': ' 3/8', '⅝': ' 5/8', '⅞': ' 7/8' };
+
+/** Converte "1/2", "1 1/2", "1 e 1/2", "½", "0,5" ou "2" em número. Vazio vira null. */
 function lerQuantidade(texto) {
-  const t = String(texto || '').trim().replace(',', '.');
+  const t = String(texto || '').replace(/[½⅓⅔¼¾⅛⅜⅝⅞]/g, c => FRACOES_UNICODE[c])
+    .replace(/\s+e\s+/i, ' ').trim().replace(',', '.');
   if (!t) return null;
   const misto = t.match(/^(\d+)\s+(\d+)\/(\d+)$/);
   if (misto) return Number(misto[1]) + Number(misto[2]) / Number(misto[3]);
@@ -202,7 +218,9 @@ async function carregarCategorias() {
     if (r.error) throw r.error;
     data = r.data;
   }
-  estado.categorias = data;
+  // Ordem alfabética (sem ligar para acentos), com Outras sempre por último.
+  estado.categorias = data.slice().sort((a, b) =>
+    (a.nome === 'Outras') - (b.nome === 'Outras') || a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
 }
 
 async function carregarEtiquetas() {
@@ -356,7 +374,7 @@ async function telaReceita(id) {
       grupoAtual = i.grupo || null;
       if (grupoAtual) listaIng.append(el('li', { class: 'grupo-titulo', text: grupoAtual }));
     }
-    const qtd = [i.quantidade !== null ? formatarNumero(i.quantidade) : null, i.unidade].filter(Boolean).join(' ');
+    const qtd = [i.quantidade !== null ? formatarQuantidade(i.quantidade) : null, i.unidade].filter(Boolean).join(' ');
     listaIng.append(el('li', {},
       qtd ? el('span', { class: 'quantidade', text: qtd + ' ' }) : null,
       i.nome,
@@ -493,7 +511,7 @@ async function telaFormulario(id, revisao = null) {
   function linhaIngrediente(i = {}) {
     const linha = el('div', { class: 'linha-ingrediente', 'data-tipo': 'ing', 'data-original': i.texto_original || null },
       el('input', { type: 'text', inputmode: 'decimal', placeholder: 'Qtd', 'aria-label': 'Quantidade',
-        value: i.quantidade !== null && i.quantidade !== undefined ? formatarNumero(i.quantidade) : '' }),
+        value: i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : '' }),
       el('input', { type: 'text', placeholder: 'Unid.', maxlength: 30, 'aria-label': 'Unidade', value: i.unidade || '' }),
       el('input', { type: 'text', placeholder: 'Ingrediente', maxlength: 200, 'aria-label': 'Ingrediente', value: i.nome || '' }),
       el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover ingrediente', onclick: () => linha.remove() }, '×'));

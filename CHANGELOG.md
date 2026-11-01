@@ -1,5 +1,14 @@
 # Histórico de versões
 
+## Versão 7 (01/11/2026), Entrega 2: IA mais resistente e ajustes pedidos
+
+- **IA sobrecarregada (erro 503)**: a função espera 3 s e tenta de novo; se continuar, usa o modelo reserva `gemini-3.5-flash-lite` (também com cota gratuita) e tenta mais uma vez. Também vale para falta de cota (429). Tempo total limitado a 125 s. Mensagem clara se tudo falhar; o modelo usado fica em `importacoes.modelo_ia`.
+- **Frações**: quantidades aparecem como 1/2, 1 1/2, 1/3, 3/4 (na receita e no formulário); o formulário aceita 1/2, 1 1/2, "1 e 1/2", ½ e 0,5.
+- **Categorias em ordem alfabética** (sem ligar para acentos), com Outras sempre por último, nas abas e na seleção.
+- **"Bebidas" passa a "Bebidas e Drinks"**: script `supabase/07-bebidas-e-drinks.sql`.
+- **Lista mais compacta**: miniatura de 52 px, espaçamento e letras menores.
+- Testes locais: importação 30 de 30, função 36 de 36, cadastro 25 de 25, lista 12 de 12, áudio 7 de 7.
+
 ## Versão 6 (01/11/2026), Entrega 2: áudio do vídeo no iPhone
 
 - No 1º teste real no iPhone, o navegador não decodificou o áudio do vídeo e a IA leu só as imagens (faltaram quantidades ditas em voz alta).

@@ -19,6 +19,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/04-utensilios-observacoes-categorias.sql` | Utensílios, observações e 4 categorias novas |
 | `supabase/05-ajuste-categorias.sql` | Carne de rês; Japonês e Chinês numa só categoria; nova ordem |
 | `supabase/06-importacao-ia.sql` | Tipo "combinado" nas importações e categoria Bebidas |
+| `supabase/07-bebidas-e-drinks.sql` | "Bebidas" passa a "Bebidas e Drinks" |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que envia legenda, imagens e áudio ao Gemini e devolve a receita |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
 

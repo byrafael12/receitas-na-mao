@@ -98,9 +98,11 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 .botao.selecionado { border-color: var(--destaque); color: var(--destaque); }
 
 /* Visão em lista: miniatura à esquerda */
-.lista { display: flex; flex-direction: column; gap: 8px; }
-.item-lista { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; align-items: center; padding: 8px; background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio); color: var(--texto); text-decoration: none; box-shadow: var(--sombra); }
-.item-lista .capa { width: 72px; height: 72px; border-radius: 8px; font-size: 1.4rem; }
+.lista { display: flex; flex-direction: column; gap: 6px; }
+.item-lista { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; align-items: center; padding: 6px 8px; background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio); color: var(--texto); text-decoration: none; box-shadow: var(--sombra); }
+.item-lista .capa { width: 52px; height: 52px; border-radius: 6px; font-size: 1.1rem; }
+.item-lista .cartao-titulo { font-size: 0.95rem; line-height: 1.25; }
+.item-lista .cartao-info { font-size: 0.8rem; }
 .item-lista .cartao-titulo { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cartao {
   display: block; overflow: hidden;
