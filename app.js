@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '5';
+const VERSAO = '6';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -773,6 +773,143 @@ async function audioDoVideo(arquivo, duracao) {
   return { wav: new Blob([wav], { type: 'audio/wav' }), silencioso: pico < 0.01 };
 }
 
+/* Extrai a trilha de áudio AAC de um vídeo MP4/MOV sem decodificar o som:
+   lê a "tabela de conteúdo" do arquivo (caixa moov), localiza cada pedaço de
+   áudio e monta um arquivo .aac (formato ADTS). Funciona no iPhone, onde o
+   navegador não decodifica áudio de dentro de vídeo. */
+const MAX_AUDIO_AAC = 6_500_000; // ~5 min a 160 kbps
+
+async function lerFatia(arquivo, inicio, tamanho) {
+  return new DataView(await arquivo.slice(inicio, inicio + tamanho).arrayBuffer());
+}
+
+function caixas(dv, inicio, fim) {
+  const lista = [];
+  let pos = inicio;
+  while (pos + 8 <= fim) {
+    let tam = dv.getUint32(pos);
+    const tipo = String.fromCharCode(dv.getUint8(pos + 4), dv.getUint8(pos + 5), dv.getUint8(pos + 6), dv.getUint8(pos + 7));
+    let cab = 8;
+    if (tam === 1) { tam = Number(dv.getBigUint64(pos + 8)); cab = 16; }
+    else if (tam === 0) tam = fim - pos;
+    if (tam < cab || pos + tam > fim) break;
+    lista.push({ tipo, ini: pos + cab, fim: pos + tam });
+    pos += tam;
+  }
+  return lista;
+}
+const filha = (dv, caixa, tipo) => caixas(dv, caixa.ini, caixa.fim).find(c => c.tipo === tipo);
+
+async function acharMoov(arquivo) {
+  let pos = 0;
+  while (pos + 8 <= arquivo.size) {
+    const dv = await lerFatia(arquivo, pos, 16);
+    let tam = dv.getUint32(0);
+    const tipo = String.fromCharCode(dv.getUint8(4), dv.getUint8(5), dv.getUint8(6), dv.getUint8(7));
+    if (tam === 1) tam = Number(dv.getBigUint64(8));
+    else if (tam === 0) tam = arquivo.size - pos;
+    if (tam < 8) break;
+    if (tipo === 'moov') {
+      if (tam > 50_000_000) throw new Error('Cabeçalho do vídeo grande demais');
+      return lerFatia(arquivo, pos, tam);
+    }
+    pos += tam;
+  }
+  throw new Error('Vídeo sem cabeçalho MP4');
+}
+
+function tamanhoDescritor(dv, pos) {
+  let tam = 0, n = 0, b;
+  do { b = dv.getUint8(pos + n); tam = (tam << 7) | (b & 0x7f); n++; } while (b & 0x80 && n < 4);
+  return { tam, n };
+}
+
+/** Lê a configuração AAC (tipo, taxa, canais) de dentro da caixa esds. */
+function configuracaoAac(dv, ini, fim) {
+  // procura a caixa esds dentro da entrada de áudio (pode estar dentro de "wave")
+  for (let p = ini; p + 8 < fim; p++) {
+    if (dv.getUint32(p + 4) !== 0x65736473) continue; // 'esds'
+    let q = p + 12; // tamanho + tipo + versão/flags
+    const lim = p + dv.getUint32(p);
+    while (q < lim) {
+      const tag = dv.getUint8(q);
+      const { tam, n } = tamanhoDescritor(dv, q + 1);
+      const corpo = q + 1 + n;
+      if (tag === 0x03) { // ES_Descriptor
+        const flags = dv.getUint8(corpo + 2);
+        q = corpo + 3 + (flags & 0x80 ? 2 : 0) + (flags & 0x40 ? 1 + dv.getUint8(corpo + 3) : 0) + (flags & 0x20 ? 2 : 0);
+      } else if (tag === 0x04) { // DecoderConfigDescriptor
+        if (dv.getUint8(corpo) !== 0x40) throw new Error('O áudio do vídeo não é AAC');
+        q = corpo + 13;
+      } else if (tag === 0x05) { // AudioSpecificConfig
+        const b0 = dv.getUint8(corpo), b1 = dv.getUint8(corpo + 1);
+        let tipo = b0 >> 3;
+        const freq = ((b0 & 7) << 1) | (b1 >> 7);
+        const canais = (b1 >> 3) & 0xf;
+        if (tipo === 5 || tipo === 29) tipo = 2; // HE-AAC: o ADTS leva a camada básica
+        if (freq > 12 || tipo < 1 || tipo > 4 || canais < 1 || canais > 7) throw new Error('Formato de áudio não suportado');
+        return { perfil: tipo - 1, freq, canais };
+      } else {
+        q = corpo + tam;
+      }
+    }
+  }
+  throw new Error('Configuração de áudio não encontrada');
+}
+
+async function audioAacDoVideo(arquivo) {
+  const moov = await acharMoov(arquivo);
+  const raiz = { ini: 8, fim: moov.byteLength };
+  for (const trak of caixas(moov, raiz.ini, raiz.fim).filter(c => c.tipo === 'trak')) {
+    const mdia = filha(moov, trak, 'mdia'); if (!mdia) continue;
+    const hdlr = filha(moov, mdia, 'hdlr');
+    if (!hdlr || moov.getUint32(hdlr.ini + 8) !== 0x736f756e) continue; // 'soun'
+    const minf = filha(moov, mdia, 'minf');
+    const stbl = minf && filha(moov, minf, 'stbl');
+    if (!stbl) continue;
+    const stsd = filha(moov, stbl, 'stsd'), stsz = filha(moov, stbl, 'stsz'), stsc = filha(moov, stbl, 'stsc');
+    const stco = filha(moov, stbl, 'stco') || filha(moov, stbl, 'co64');
+    if (!stsd || !stsz || !stsc || !stco) continue;
+    const entrada = caixas(moov, stsd.ini + 8, stsd.fim)[0];
+    if (!entrada || entrada.tipo !== 'mp4a') throw new Error('O áudio do vídeo não é AAC');
+    const cfg = configuracaoAac(moov, entrada.ini, entrada.fim);
+
+    // Tamanho de cada pedaço (amostra) de áudio
+    const tamFixo = moov.getUint32(stsz.ini + 4), qtd = moov.getUint32(stsz.ini + 8);
+    const tamanhos = new Array(qtd);
+    for (let i = 0; i < qtd; i++) tamanhos[i] = tamFixo || moov.getUint32(stsz.ini + 12 + i * 4);
+    // Onde começa cada bloco (chunk) e quantas amostras ele tem
+    const is64 = stco.tipo === 'co64', nBlocos = moov.getUint32(stco.ini + 4);
+    const inicioBloco = i => is64 ? Number(moov.getBigUint64(stco.ini + 8 + i * 8)) : moov.getUint32(stco.ini + 8 + i * 4);
+    const nRegras = moov.getUint32(stsc.ini + 4);
+    const regras = Array.from({ length: nRegras }, (_, i) => ({
+      primeiro: moov.getUint32(stsc.ini + 8 + i * 12), amostras: moov.getUint32(stsc.ini + 12 + i * 12)
+    }));
+    const total = tamanhos.reduce((a, b) => a + b, 0) + qtd * 7;
+    if (total > MAX_AUDIO_AAC) throw new Error('Áudio grande demais');
+    const saida = new Uint8Array(total);
+    let escrita = 0, amostra = 0;
+    for (let b = 0; b < nBlocos && amostra < qtd; b++) {
+      let r = regras.length - 1;
+      while (r > 0 && regras[r].primeiro > b + 1) r--;
+      const n = Math.min(regras[r].amostras, qtd - amostra);
+      let bytesBloco = 0;
+      for (let k = 0; k < n; k++) bytesBloco += tamanhos[amostra + k];
+      const dados = new Uint8Array(await arquivo.slice(inicioBloco(b), inicioBloco(b) + bytesBloco).arrayBuffer());
+      let p = 0;
+      for (let k = 0; k < n; k++, amostra++) {
+        const tam = tamanhos[amostra], len = tam + 7;
+        saida.set([0xff, 0xf1, (cfg.perfil << 6) | (cfg.freq << 2) | (cfg.canais >> 2),
+          ((cfg.canais & 3) << 6) | (len >> 11), (len >> 3) & 0xff, ((len & 7) << 5) | 0x1f, 0xfc], escrita);
+        saida.set(dados.subarray(p, p + tam), escrita + 7);
+        escrita += len; p += tam;
+      }
+    }
+    return new Blob([saida.subarray(0, escrita)], { type: 'audio/aac' });
+  }
+  throw new Error('O vídeo não tem trilha de áudio');
+}
+
 function telaImportar() {
   const legenda = el('textarea', { maxlength: 20000, 'aria-label': 'Legenda ou texto da receita',
     placeholder: 'Cole aqui a legenda do post ou o texto da receita (opcional)' });
@@ -827,12 +964,20 @@ function telaImportar() {
           candidatos.push({ blob: q, url: URL.createObjectURL(q) });
         }
         status.textContent = 'Separando o áudio do vídeo…';
+        // 1º: copia o áudio AAC direto do arquivo (funciona no iPhone).
+        // 2º: se não der, decodifica e gera WAV (funciona no Chrome do Windows).
         try {
-          const a = await audioDoVideo(video, v.duracao);
-          if (a.silencioso) avisos.push('O vídeo não tem fala; a IA usou só as imagens.');
-          else corpo.audio = { mime: 'audio/wav', dados: await blobParaBase64(a.wav) };
-        } catch {
-          avisos.push('Não consegui ler o áudio do vídeo neste aparelho; a IA usou só as imagens.');
+          const aac = await audioAacDoVideo(video);
+          corpo.audio = { mime: 'audio/aac', dados: await blobParaBase64(aac) };
+        } catch (erroAac) {
+          try {
+            const a = await audioDoVideo(video, v.duracao);
+            if (a.silencioso) avisos.push('O vídeo não tem fala; a IA usou só as imagens.');
+            else corpo.audio = { mime: 'audio/wav', dados: await blobParaBase64(a.wav) };
+          } catch {
+            avisos.push(/não tem trilha/.test(erroAac.message) ? 'O vídeo não tem áudio; a IA usou só as imagens.'
+              : 'Não consegui ler o áudio do vídeo neste aparelho; a IA usou só as imagens.');
+          }
         }
       }
       status.textContent = 'A IA está lendo a receita…';

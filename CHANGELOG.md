@@ -1,5 +1,12 @@
 # Histórico de versões
 
+## Versão 6 (01/11/2026), Entrega 2: áudio do vídeo no iPhone
+
+- No 1º teste real no iPhone, o navegador não decodificou o áudio do vídeo e a IA leu só as imagens (faltaram quantidades ditas em voz alta).
+- O app agora **copia a trilha de áudio AAC direto do arquivo MP4/MOV**, sem decodificar o som: lê o cabeçalho do vídeo (caixa `moov`), localiza os pedaços de áudio e monta um arquivo `.aac`. Funciona em qualquer navegador e gera metade do tamanho (mousse 2:59: 1,46 MB, antes 2,86 MB). Se o vídeo não tiver áudio AAC, tenta o método antigo (WAV); se nada der, avisa.
+- Edge Function aceita `audio/aac` além de `audio/wav`.
+- Testes locais: extração AAC 7 de 7 (MP4 do Instagram, MOV, cabeçalho no início e no fim, mono 22 kHz, vídeo sem áudio), áudio idêntico byte a byte ao extraído pelo ffmpeg; importação 29 de 29; função 33 de 33; interface 25 de 25; lista 12 de 12.
+
 ## Versão 5 (01/11/2026), Entrega 2: importação com IA
 
 - **+ Nova** abre a importação: legenda, prints (até 10) e vídeo (até 5 minutos), em qualquer combinação. O aparelho reduz as imagens, tira até 30 quadros e o áudio do vídeo (mono 8 kHz); o vídeo nunca é enviado.
@@ -8,6 +15,7 @@
 - Cadastro manual continua em **Nova receita > Cadastro manual**.
 - Categoria **Bebidas**. Script `supabase/06-importacao-ia.sql`.
 - CSP: `media-src blob:` (leitura do vídeo no aparelho).
+- Correção (01/11/2026, após o 1º teste real: Gemini respondeu 400 "invalid argument"): a função tenta, em ordem, `responseJsonSchema`, `responseSchema`, JSON livre e, por último, JSON livre sem o áudio; o motivo de cada recusa vai para os logs da função e o formato que funcionou fica em `importacoes.modelo_ia`. Sem `temperature` (padrão do modelo). Testes da função: 31 de 31.
 - Testes locais: importação 29 de 29 (arquivos reais), função da IA 29 de 29, interface 25 de 25, lista 12 de 12.
 
 ## Versão 4 (01/11/2026), Entrega 1
