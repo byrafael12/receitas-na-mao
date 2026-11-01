@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!--
+    CSP (Content Security Policy): lista do que a página aceita.
+    Só scripts e estilos do próprio site; imagens do próprio site, de
+    "blob:" (prévia da foto escolhida) e do Supabase; conexões só com o
+    Supabase. Isso bloqueia código injetado (XSS) mesmo se algo escapar.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://dmvjlirobozpmkusnnez.supabase.co; connect-src https://dmvjlirobozpmkusnnez.supabase.co wss://dmvjlirobozpmkusnnez.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'">
+  <meta name="referrer" content="no-referrer">
+  <title>Receitas na mão</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icones/icone-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icones/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Receitas">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#b4532a">
+  <link rel="stylesheet" href="styles.css">
+  <script src="lib/supabase.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topo" id="topo" hidden>
+    <a class="marca" href="#/">Receitas na mão</a>
+    <a class="botao-icone" href="#/ajustes" aria-label="Ajustes" title="Ajustes">⚙</a>
+  </header>
+  <main id="app" class="conteudo">
+    <p class="aviso">Carregando…</p>
+  </main>
+  <noscript>Este app precisa de JavaScript.</noscript>
+</body>
+</html>

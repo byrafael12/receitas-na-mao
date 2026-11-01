@@ -1,2 +1,31 @@
 # receitas-na-mao
-App pessoal de receitas
+
+App pessoal de receitas em HTML, CSS e JavaScript, publicado no GitHub Pages, com dados no Supabase.
+
+Endereço: https://byrafael12.github.io/receitas-na-mao/
+
+## Estrutura
+
+| Arquivo ou pasta | Para que serve |
+| --- | --- |
+| `index.html` | Página do app, com a política de segurança (CSP) |
+| `app.js` | Lógica do app: login Google, lista, receita, formulário |
+| `styles.css` | Aparência (tema claro e escuro automáticos) |
+| `manifest.webmanifest` e `icones/` | Atalho na tela de início do iPhone |
+| `lib/supabase.js` | Biblioteca supabase-js 2.118.0 servida pelo próprio site (sem CDN), licença MIT em `lib/LICENSE-supabase-js.txt` |
+| `supabase/01-tabelas-e-seguranca.sql` | Tabelas, RLS forçada, função `salvar_receita`, pasta de imagens `capas` |
+| `supabase/02-backup.sql` | Função de backup só de leitura, protegida por chave |
+| `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
+
+## Segurança
+
+- O repositório é público e contém só código. Nenhuma chave secreta, senha, token ou dado de receita entra aqui.
+- A chave `sb_publishable_` e o endereço do projeto Supabase são públicos por definição; o que protege os dados é o RLS: cada linha só é visível ao dono.
+- Cadastro de novos usuários desligado no Supabase; login só com Google, app do Google em modo de teste com um único usuário autorizado.
+- Todo texto de receita é exibido com `textContent`, nunca com `innerHTML` (proteção contra XSS). Links da fonte só `http` ou `https`.
+- CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe.
+- O backup usa uma função que só lê e só responde a uma chave própria (guardada nas Propriedades do Apps Script); o banco guarda apenas o hash dela. A chave `service_role` não é usada.
+
+## Versão
+
+Ver `CHANGELOG.md`.
