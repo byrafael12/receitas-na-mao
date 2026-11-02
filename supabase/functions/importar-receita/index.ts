@@ -614,6 +614,25 @@ async function lerLink(endereco: string): Promise<ResultadoLink> {
   };
 }
 
+/** Lê o corpo do pedido até "max" bytes; devolve null se passar do limite. */
+async function lerCorpoLimitado(req: Request, max: number): Promise<string | null> {
+  if (!req.body) return '';
+  const leitor = req.body.getReader();
+  const pedacos: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await leitor.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) { await leitor.cancel(); return null; }
+    pedacos.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let pos = 0;
+  for (const p of pedacos) { bytes.set(p, pos); pos += p.length; }
+  return new TextDecoder().decode(bytes);
+}
+
 // ---------------------------------------------------------------------
 // Função principal
 // ---------------------------------------------------------------------
@@ -649,9 +668,15 @@ Deno.serve(async (req) => {
   const { count } = await sb.from('importacoes').select('id', { count: 'exact', head: true }).gte('criada_em', inicioDoDia.toISOString());
   if ((count ?? 0) >= LIMITE_POR_DIA) return resposta(429, { erro: `Limite de ${LIMITE_POR_DIA} importações por dia atingido. Tente amanhã.` }, origem);
 
+  // Lê o pedido contando os bytes (achado S2): o limite vale mesmo sem o
+  // cabeçalho Content-Length (pedido enviado em partes).
   // deno-lint-ignore no-explicit-any
   let corpo: any;
-  try { corpo = await req.json(); } catch { return resposta(400, { erro: 'Pedido inválido' }, origem); }
+  try {
+    const bruto = await lerCorpoLimitado(req, MAX_CORPO);
+    if (bruto === null) return resposta(413, { erro: 'Arquivos grandes demais. Use um vídeo menor ou menos imagens.' }, origem);
+    corpo = JSON.parse(bruto);
+  } catch { return resposta(400, { erro: 'Pedido inválido' }, origem); }
 
   const textoColado = typeof corpo?.texto === 'string' ? corpo.texto.slice(0, MAX_TEXTO).trim() : '';
   const imagens = Array.isArray(corpo?.imagens) ? corpo.imagens.filter(imagemValida).slice(0, MAX_IMAGENS) : [];
@@ -722,7 +747,8 @@ Deno.serve(async (req) => {
   // deno-lint-ignore no-explicit-any
   let receitas: any[] = [];
   let aviso: string | null = [erroLink && `Link não lido: ${erroLink} A receita foi lida do resto do material.`, link?.aviso].filter(Boolean).join(' ') || null;
-  let erro: string | null = null;
+  let erro: string | null = null;       // mensagem curta para a tela
+  let erroDetalhe: string | null = null; // detalhe técnico: só no registro e nos logs (achado S3)
 
   // Tentativas em ordem. Se a IA recusar o pedido (erro 400), passa para a
   // próxima: outro jeito de pedir o formato, sem formato e, por último, sem
@@ -790,12 +816,17 @@ Deno.serve(async (req) => {
       recusas.push(`${t.nome}: ${detalhe}`);
     }
     if (!tentativaUsada) {
-      throw new Error((link?.origem === 'youtube'
-        ? 'A IA não conseguiu abrir este vídeo do YouTube (vídeo privado, não listado, com restrição de idade ou longo demais). Detalhe: '
-        : 'IA recusou o pedido em todas as tentativas. ') + recusas.join(' | ').slice(0, 600));
+      erroDetalhe = 'Recusas: ' + recusas.join(' | ').slice(0, 800);
+      throw new Error(link?.origem === 'youtube'
+        ? 'A IA não conseguiu abrir este vídeo do YouTube (vídeo privado, não listado, com restrição de idade ou longo demais).'
+        : 'A IA recusou o pedido. Tente de novo; se repetir, avise (o detalhe ficou no registro da importação).');
     }
     if (tentativaUsada === 'json-livre-sem-audio') aviso = [aviso, 'A IA não aceitou o áudio deste vídeo; a receita foi lida só das imagens e da legenda.'].filter(Boolean).join(' ');
-    if (!r!.ok) throw new Error(`IA respondeu ${r!.status}: ${(await r!.text()).slice(0, 200)}`);
+    if (!r!.ok) {
+      erroDetalhe = `IA respondeu ${r!.status}: ${(await r!.text()).replace(/\s+/g, ' ').slice(0, 300)}`;
+      console.error(erroDetalhe);
+      throw new Error(`O serviço de IA respondeu com erro (${r!.status}). Tente de novo em alguns minutos.`);
+    }
     const json = await r!.json();
     tokensEntrada = json?.usageMetadata?.promptTokenCount ?? null;
     tokensSaida = json?.usageMetadata?.candidatesTokenCount ?? null;
@@ -822,10 +853,10 @@ Deno.serve(async (req) => {
     tokens_entrada: tokensEntrada,
     tokens_saida: tokensSaida,
     sucesso: !erro,
-    erro: erro ? erro.slice(0, 1000) : null,
+    erro: erro ? [erro, erroDetalhe].filter(Boolean).join(' · ').slice(0, 1000) : null,
     receitas_encontradas: receitas.length
   }).select('id').maybeSingle();
 
-  if (erro) return resposta(502, { erro, importacao_id: registro?.id ?? null }, origem);
+  if (erro) return resposta(502, { erro: erro.slice(0, 300), importacao_id: registro?.id ?? null }, origem);
   return resposta(200, { receitas, aviso, importacao_id: registro?.id ?? null, tipo_entrada: tipoEntrada, link: respostaLink }, origem);
 });

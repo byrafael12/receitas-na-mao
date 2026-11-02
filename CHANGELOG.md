@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## Versão 15 (02/11/2026), Entrega 4: correções da avaliação de segurança
+
+- **S1, login PKCE**: o Google devolve só um código de uso único (`?code=`), trocado pela sessão com um segredo guardado no aparelho. O crachá de acesso não passa mais pelo endereço nem fica no histórico do navegador. Se a troca falhar (ex.: o login abriu numa janela separada no iPhone), o app mostra "O login não terminou neste aparelho" em vez de travar. Para voltar ao modo antigo: em `app.js`, trocar `flowType: 'pkce'` por `flowType: 'implicit'`.
+- **S2, limite real de tamanho**: a função da IA conta os bytes do pedido; acima de 18 MB recusa (413), mesmo sem o cabeçalho Content-Length.
+- **S3, mensagens curtas**: erros da IA aparecem na tela com mensagem curta; o detalhe técnico fica só no registro da importação e nos logs da função.
+- Sem SQL.
+- Testes locais: login 7 de 7, função 80 de 80, backup 22 de 22, versão 13 31 de 31, cozinha 21 de 21, compartilhar 21 de 21, sem internet 17 de 17, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 14 (02/11/2026), Entrega 4: baixar e restaurar backup
 
 - **Baixar backup** (Ajustes > Backup): arquivo com receitas, ingredientes, passos, categorias e etiquetas, no mesmo formato do backup automático do Drive; opção **Incluir as fotos**. No iPhone abre o compartilhamento (Salvar em Arquivos); no computador, vai para Downloads. Funciona também sem internet (usa a cópia do aparelho).

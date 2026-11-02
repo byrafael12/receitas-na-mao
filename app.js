@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '14';
+const VERSAO = '15';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -35,7 +35,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_CHAVE_PUBLICA, {
     persistSession: true,      // mantém o login entre aberturas do app
     autoRefreshToken: true,    // renova o crachá (token) sozinho
     detectSessionInUrl: true,  // lê o retorno do login Google
-    flowType: 'implicit'
+    // Versão 15 (segurança, achado S1): PKCE. O Google devolve só um código
+    // de uso único (?code=...), trocado pela sessão com um segredo guardado
+    // neste aparelho; o crachá de acesso não passa mais pelo endereço nem
+    // fica no histórico. Para voltar ao modo antigo: flowType: 'implicit'.
+    flowType: 'pkce'
   }
 });
 
@@ -2020,6 +2024,7 @@ async function iniciar() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const erroLogin = params.get('error_description') || new URLSearchParams(location.search).get('error_description');
 
+  const voltouComCodigo = new URLSearchParams(location.search).has('code');
   const local = await lerLocal('dados', 'colecao');
   let sessao = null;
   try { sessao = (await sb.auth.getSession()).data.session; } catch { /* sem internet para renovar */ }
@@ -2030,6 +2035,11 @@ async function iniciar() {
   window.addEventListener('online', tentarReconectar);
   window.addEventListener('offline', () => { if (estado.colecao) { estado.semConexao = true; mostrarFaixa(); } });
 
+  if (!sessao && voltouComCodigo && !erroLogin) {
+    // O Google devolveu o código, mas a troca pela sessão não funcionou
+    // (ex.: o login abriu numa janela que não enxerga o segredo deste aparelho).
+    return telaLogin('O login não terminou neste aparelho. Toque em "Entrar com Google" de novo; se repetir, avise (versão 15, login PKCE).');
+  }
   if (!sessao) {
     // Sem sessão (venceu sem internet): mostra a cópia, se houver; senão, login.
     if (local && !erroLogin) {
