@@ -1,5 +1,14 @@
 # Histórico de versões
 
+## Versão 14 (02/11/2026), Entrega 4: baixar e restaurar backup
+
+- **Baixar backup** (Ajustes > Backup): arquivo com receitas, ingredientes, passos, categorias e etiquetas, no mesmo formato do backup automático do Drive; opção **Incluir as fotos**. No iPhone abre o compartilhamento (Salvar em Arquivos); no computador, vai para Downloads. Funciona também sem internet (usa a cópia do aparelho).
+- **Restaurar**: aceita o arquivo do app e o do Drive. Mostra antes quantas receitas voltam e quantas já existem, e pede confirmação. **Só acrescenta o que falta**: nada é apagado nem substituído; restaurar de novo não duplica.
+- Na restauração: mesmo código da receita; categorias reaproveitadas pelo nome (as que faltam são recriadas); foto original reaproveitada se ainda existir, senão reenviada a partir do backup (se tiver fotos); só entram dados da sua conta; antes de comparar, o app atualiza a cópia (receita nova de outro aparelho nunca é regravada).
+- Só o titular vê a seção Backup. Restaurar precisa de internet.
+- Sem SQL e sem mudança na função da IA.
+- Testes locais: backup 22 de 22, versão 13 31 de 31, cozinha 21 de 21, compartilhar 21 de 21, sem internet 17 de 17, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 13 (02/11/2026), Entrega 4: favoritas, categorias e porção digitada
 
 - **Porção digitada** (sugestão de Rafael): toque no número de porções e digite (30, 2,5 ou 1 1/2); Enter ou tocar fora confirma, Esc cancela. Limite de 1/4 a 20 vezes a receita, com aviso se ajustar. O + e o − continuam.

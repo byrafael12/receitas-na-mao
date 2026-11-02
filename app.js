@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '13';
+const VERSAO = '14';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -1649,6 +1649,7 @@ async function telaAjustes() {
       }, 'Sair')),
     el('p', { class: 'ajuda', text: 'Sair apaga a cópia guardada neste aparelho.' }),
     status,
+    estado.titular ? secaoBackup() : null,
     estado.titular ? el('div', {}, el('h2', { text: 'Categorias' }),
       el('a', { class: 'botao', href: '#/categorias' }, 'Editar categorias')) : null,
     estado.titular ? secaoLeitores() : null
@@ -1690,6 +1691,186 @@ async function rotear() {
   } catch (e) {
     mensagem(erroAmigavel(e), 'erro');
   }
+}
+
+// ---------------------------------------------------------------------
+// Backup pelo app (versão 14). Mesmo formato do backup automático do
+// Drive (versao_backup 1), com fotos opcionais. A restauração só
+// ACRESCENTA o que falta: receitas que já existem ficam como estão e
+// nada é apagado.
+// ---------------------------------------------------------------------
+const LIMITE_BACKUP = 60 * 1024 * 1024; // 60 MB
+
+function blobParaDataUrl(blob) {
+  return new Promise((ok, falha) => { const l = new FileReader(); l.onload = () => ok(l.result); l.onerror = () => falha(l.error); l.readAsDataURL(blob); });
+}
+function dataUrlParaBlob(url) {
+  const m = /^data:(image\/(?:jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(url || ''));
+  return m ? base64ParaBlob(m[2], m[1]) : null;
+}
+const hojeIso = () => new Date().toISOString().slice(0, 10);
+
+async function exportarBackup(comFotos, aoProgredir) {
+  if (!estado.semConexao) { try { await comLimite(atualizarColecao(), 15000); } catch { /* usa a cópia */ } }
+  const c = estado.colecao;
+  if (!c) throw new Error('Ainda não há cópia das receitas neste aparelho.');
+  const fotos = {};
+  if (comFotos) {
+    if (!estado.semConexao) { aoProgredir?.('Conferindo as fotos…'); await baixarCapas(c); }
+    const caminhos = [...new Set(c.receitas.map(r => r.imagem_caminho).filter(Boolean))];
+    for (const [n, caminho] of caminhos.entries()) {
+      aoProgredir?.(`Juntando fotos: ${n + 1} de ${caminhos.length}`);
+      const blob = await lerLocal('capas', caminho);
+      if (blob) fotos[caminho] = await blobParaDataUrl(blob);
+    }
+  }
+  const dados = {
+    app: 'receitas-na-mao', versao_backup: 1, origem: 'app', versao_app: VERSAO, gerado_em: new Date().toISOString(),
+    categorias: c.categorias, receitas: c.receitas, ingredientes: c.ingredientes, passos: c.passos,
+    etiquetas: c.etiquetas, receita_etiquetas: c.receita_etiquetas,
+    ...(comFotos ? { fotos } : {})
+  };
+  const nome = `receitas-na-mao-backup-${hojeIso()}${comFotos ? '-com-fotos' : ''}.json`;
+  const arquivo = new File([JSON.stringify(dados)], nome, { type: 'application/json' });
+  // Celular: abre o compartilhamento (iPhone: "Salvar em Arquivos"). Computador: baixa.
+  const celular = window.matchMedia?.('(pointer: coarse)').matches;
+  if (celular && navigator.canShare?.({ files: [arquivo] })) {
+    try { await navigator.share({ files: [arquivo], title: nome }); return { nome, receitas: c.receitas.length, fotos: Object.keys(fotos).length }; }
+    catch (e) { if (e?.name === 'AbortError') return null; }
+  }
+  const url = URL.createObjectURL(arquivo);
+  const a = el('a', { href: '#', download: nome });
+  a.href = url; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return { nome, receitas: c.receitas.length, fotos: Object.keys(fotos).length };
+}
+
+/** Lê e confere o arquivo; devolve o plano da restauração (sem gravar nada). */
+async function planejarRestauracao(arquivo) {
+  if (arquivo.size > LIMITE_BACKUP) throw new Error('Arquivo grande demais (máximo 60 MB).');
+  let dados;
+  try { dados = JSON.parse(await arquivo.text()); } catch { throw new Error('Esse arquivo não é um backup do Receitas na mão (não é JSON).'); }
+  if (dados?.app !== 'receitas-na-mao' || !Array.isArray(dados.receitas)) throw new Error('Esse arquivo não é um backup do Receitas na mão.');
+  // Cópia atualizada antes de comparar: uma receita nova de outro aparelho
+  // nunca pode ser tratada como "faltando" (seria regravada por cima).
+  await comLimite(atualizarColecao(), 20000);
+  const meu = x => !x.dono_id || x.dono_id === estado.usuario.id;
+  const lista = (k) => (Array.isArray(dados[k]) ? dados[k] : []).filter(x => x && typeof x === 'object' && meu(x));
+  const receitas = lista('receitas').filter(r => typeof r.id === 'string' && typeof r.titulo === 'string');
+  const existentes = new Set((estado.colecao?.receitas || []).map(r => r.id));
+  const novas = receitas.filter(r => !existentes.has(r.id));
+  return {
+    dados, novas, jaExistem: receitas.length - novas.length, gerado: dados.gerado_em,
+    categorias: lista('categorias'), ingredientes: lista('ingredientes'), passos: lista('passos'),
+    etiquetas: lista('etiquetas'), receitaEtiquetas: lista('receita_etiquetas'),
+    fotos: dados.fotos && typeof dados.fotos === 'object' ? dados.fotos : {}
+  };
+}
+
+async function executarRestauracao(plano, aoProgredir) {
+  const uid = estado.usuario.id;
+  // Categorias pelo nome: usa a que existe; cria a que falta.
+  const nomeCatArquivo = new Map(plano.categorias.map(c => [c.id, c.nome]));
+  const porNome = new Map(estado.categorias.map(c => [c.nome.toLowerCase(), c.id]));
+  for (const r of plano.novas) {
+    const nome = nomeCatArquivo.get(r.categoria_id);
+    if (nome && !porNome.has(nome.toLowerCase())) {
+      const ordem = Math.max(0, ...estado.categorias.map(c => c.ordem || 0)) + 1;
+      const { data, error } = await sb.from('categorias').insert({ nome, ordem }).select('id, nome, ordem, ativa').maybeSingle();
+      if (error) throw error;
+      estado.categorias.push(data); porNome.set(nome.toLowerCase(), data.id);
+    }
+  }
+  const nomeEtiqueta = new Map(plano.etiquetas.map(e => [e.id, e.nome]));
+  const porOrdem = (a, b) => (a.ordem || 0) - (b.ordem || 0);
+  let ok = 0; const falhas = [];
+  for (const [n, r] of plano.novas.entries()) {
+    aoProgredir?.(`Restaurando ${n + 1} de ${plano.novas.length}: ${r.titulo}`);
+    try {
+      // Foto: a original, se ainda existe; senão, a do backup; senão, sem foto.
+      let foto = null;
+      if (r.imagem_caminho && String(r.imagem_caminho).startsWith(`${uid}/`)) {
+        const existe = await sb.storage.from(PASTA_IMAGENS).download(r.imagem_caminho);
+        if (!existe.error && existe.data) foto = r.imagem_caminho;
+      }
+      if (!foto && plano.fotos[r.imagem_caminho]) {
+        const blob = dataUrlParaBlob(plano.fotos[r.imagem_caminho]);
+        if (blob && blob.size <= LIMITE_IMAGEM * 1.1) {
+          const caminho = `${uid}/${r.id}-${Date.now()}.jpg`;
+          const envio = await sb.storage.from(PASTA_IMAGENS).upload(caminho, blob, { contentType: blob.type, upsert: false });
+          if (!envio.error) foto = caminho;
+        }
+      }
+      const nomeCat = nomeCatArquivo.get(r.categoria_id);
+      const { error } = await sb.rpc('salvar_receita', { dados: {
+        id: r.id, titulo: r.titulo,
+        categoria_id: nomeCat ? porNome.get(nomeCat.toLowerCase()) || null : null,
+        porcoes: r.porcoes ?? null, tempo_preparo_min: r.tempo_preparo_min ?? null, tempo_total_min: r.tempo_total_min ?? null,
+        imagem_caminho: foto, fonte_url: linkSeguro(r.fonte_url) || null, fonte_autor: r.fonte_autor || null,
+        fonte_tipo: r.fonte_tipo || 'manual', favorita: !!r.favorita,
+        utensilios: Array.isArray(r.utensilios) ? r.utensilios : [], observacoes: r.observacoes || null,
+        ingredientes: plano.ingredientes.filter(i => i.receita_id === r.id).sort(porOrdem).map(i => ({
+          grupo: i.grupo || null, quantidade: i.quantidade ?? null, unidade: i.unidade || null, nome: i.nome,
+          observacao: i.observacao || null, texto_original: i.texto_original || null })),
+        passos: plano.passos.filter(x => x.receita_id === r.id).sort(porOrdem).map(x => ({ grupo: x.grupo || null, texto: x.texto })),
+        etiquetas: plano.receitaEtiquetas.filter(x => x.receita_id === r.id).map(x => nomeEtiqueta.get(x.etiqueta_id)).filter(Boolean)
+      } });
+      if (error) throw error;
+      ok++;
+    } catch (e) {
+      falhas.push(`${r.titulo}: ${erroAmigavel(e)}`);
+    }
+  }
+  aoProgredir?.('Atualizando a cópia no aparelho…');
+  try { await atualizarColecao(); } catch { estado.colecao = null; }
+  return { ok, falhas };
+}
+
+/** Ajustes do titular: baixar e restaurar backup (versão 14). */
+function secaoBackup() {
+  const status = el('div', { class: 'status backup-status', role: 'status' });
+  const comFotos = el('input', { type: 'checkbox', 'aria-label': 'Incluir as fotos' });
+  const baixar = el('button', { class: 'botao', type: 'button' }, 'Baixar backup');
+  baixar.addEventListener('click', async () => {
+    baixar.disabled = true; status.className = 'status backup-status';
+    try {
+      const r = await exportarBackup(comFotos.checked, t => { status.textContent = t; });
+      status.textContent = r ? `Backup pronto: ${r.nome} (${r.receitas} receitas${comFotos.checked ? `, ${r.fotos} fotos` : ''}).` : 'Cancelado.';
+    } catch (e) { status.className = 'status erro backup-status'; status.textContent = erroAmigavel(e); }
+    baixar.disabled = false;
+  });
+  const arquivo = el('input', { type: 'file', accept: '.json,application/json', 'aria-label': 'Arquivo de backup', disabled: estado.semConexao });
+  const confirmar = el('div');
+  arquivo.addEventListener('change', async () => {
+    confirmar.replaceChildren(); status.className = 'status backup-status';
+    const f = arquivo.files[0]; if (!f) return;
+    let plano;
+    try { plano = await planejarRestauracao(f); } catch (e) { status.className = 'status erro backup-status'; status.textContent = erroAmigavel(e); return; }
+    const quando = plano.gerado ? ` de ${dataHoraCurta(plano.gerado)}` : '';
+    if (!plano.novas.length) { status.textContent = `Backup${quando}: todas as ${plano.jaExistem} receitas já estão no app. Nada a restaurar.`; return; }
+    status.textContent = `Backup${quando}: ${plano.novas.length} receita(s) para restaurar; ${plano.jaExistem} já estão no app e ficam como estão. Nada será apagado.`;
+    const botao = el('button', { class: 'botao principal', type: 'button' }, `Restaurar ${plano.novas.length} receita(s)`);
+    botao.addEventListener('click', async () => {
+      botao.disabled = true; arquivo.disabled = true;
+      try {
+        const r = await executarRestauracao(plano, t => { status.textContent = t; });
+        confirmar.replaceChildren();
+        status.textContent = `${r.ok} receita(s) restaurada(s).` + (r.falhas.length ? ` Não restauradas: ${r.falhas.join('; ')}` : '');
+        if (r.falhas.length) status.className = 'status erro backup-status';
+      } catch (e) { status.className = 'status erro backup-status'; status.textContent = erroAmigavel(e); botao.disabled = false; }
+      arquivo.disabled = false; arquivo.value = '';
+    });
+    confirmar.replaceChildren(el('div', { class: 'acoes' }, botao,
+      el('button', { class: 'botao', type: 'button', onclick: () => { confirmar.replaceChildren(); arquivo.value = ''; status.textContent = 'Restauração cancelada.'; } }, 'Cancelar')));
+  });
+  return el('div', {},
+    el('h2', { text: 'Backup' }),
+    el('p', { class: 'ajuda', text: 'Além do backup automático no Drive (segunda e quinta), você pode baixar um arquivo agora. Com fotos, fica maior (cerca de 15 MB a cada 100 receitas).' }),
+    el('label', { class: 'opcao' }, comFotos, ' Incluir as fotos'),
+    el('div', { class: 'acoes' }, baixar),
+    el('h3', { text: 'Restaurar' }),
+    el('p', { class: 'ajuda', text: estado.semConexao ? 'Precisa de internet para restaurar.' : 'Escolha um backup baixado pelo app ou do Drive (Backups > Receitas na mão). Só volta o que estiver faltando: nada é apagado nem substituído.' }),
+    arquivo, confirmar, status);
 }
 
 /** Categorias (versão 13, só o titular): criar, renomear e remover.
