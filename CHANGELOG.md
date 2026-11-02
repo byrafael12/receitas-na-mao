@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## Versão 13 (02/11/2026), Entrega 4: favoritas, categorias e porção digitada
+
+- **Porção digitada** (sugestão de Rafael): toque no número de porções e digite (30, 2,5 ou 1 1/2); Enter ou tocar fora confirma, Esc cancela. Limite de 1/4 a 20 vezes a receita, com aviso se ajustar. O + e o − continuam.
+- **Favoritas**: botão **☆ Favoritar / ★ Favorita** na receita; aba **★ Favoritas** na lista (logo depois de Todas, só quando há favoritas); estrela no cartão (grade) e antes do título (lista). Marcar favorita não muda a ordem da lista. Conta só de leitura marca favoritas só no próprio aparelho.
+- **Categorias editáveis**: Ajustes > **Editar categorias**: renomear (tocando no nome), criar e remover. Remover não apaga receitas: elas vão para "Outras", de uma vez, sem mudar a ordem da lista. "Outras" não pode ser renomeada nem removida. Nome repetido é recusado. Limite de 40 categorias.
+- Script `supabase/10-favoritas-e-categorias.sql`: favorita e mudança de categoria em lote não alteram a data da receita; função `remover_categoria`.
+- Testes locais: banco 14 de 14 (script 10) e 26 de 26 (script 09 com o 10), versão 13 31 de 31, cozinha 21 de 21, compartilhar 21 de 21, sem internet 17 de 17, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 12 (02/11/2026), Entrega 4: na cozinha
 
 - **Porções com recálculo**: na receita, seletor **Porções − 4 +** acima dos ingredientes. As quantidades mudam na hora (4 para 8 dobra; "a gosto" não muda), com arredondamento de cozinha: 10 ou mais vira número inteiro (750 g), abaixo disso a fração mais próxima (1/2, 1/3, 3/4, 1/8). **Original** volta ao cadastrado. Só muda a visualização; a receita salva continua igual. Receita sem porções cadastradas: multiplicador (1x, 1,5x, 2x...).

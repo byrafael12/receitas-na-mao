@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '12';
+const VERSAO = '13';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -463,6 +463,35 @@ function gravarPreferencia(chave, valor) {
   try { localStorage.setItem('receitas.' + chave, valor); } catch { /* sem armazenamento */ }
 }
 
+// ---------------------------------------------------------------------
+// Favoritas (versão 13). Titular: gravada na receita (vale em todos os
+// aparelhos). Conta só de leitura: guardada só neste aparelho.
+// ---------------------------------------------------------------------
+function chaveFavoritasLocais() { return `favoritas-${estado.usuario?.id || ''}`; }
+function favoritasLocais() {
+  try { return new Set(JSON.parse(localStorage.getItem(chaveFavoritasLocais()) || '[]')); } catch { return new Set(); }
+}
+function ehFavorita(r) {
+  return estado.titular ? !!r.favorita : favoritasLocais().has(r.id);
+}
+/** Marca ou desmarca. Devolve o novo estado, ou null se não deu. */
+async function alternarFavorita(r) {
+  const nova = !ehFavorita(r);
+  if (!estado.titular) {
+    const f = favoritasLocais();
+    if (nova) f.add(r.id); else f.delete(r.id);
+    try { localStorage.setItem(chaveFavoritasLocais(), JSON.stringify([...f])); } catch { return null; }
+    return nova;
+  }
+  if (estado.semConexao) { alert('Sem internet: para marcar favorita, conecte-se.'); return null; }
+  const { error } = await sb.from('receitas').update({ favorita: nova }).eq('id', r.id);
+  if (error) { alert(erroAmigavel(error)); return null; }
+  r.favorita = nova;
+  const naCopia = estado.colecao?.receitas.find(x => x.id === r.id);
+  if (naCopia) { naCopia.favorita = nova; await gravarLocal('dados', 'colecao', estado.colecao); }
+  return nova;
+}
+
 /** Texto sem acento e em minúsculas, para a busca ("Pão" vira "pao"). */
 function normalizar(t) {
   return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -511,6 +540,7 @@ async function telaLista() {
   function itemGrade(r) {
     return el('a', { class: 'cartao', href: `#/receita/${r.id}` },
       elementoCapa(urls[r.imagem_caminho], ''),
+      ehFavorita(r) ? el('span', { class: 'selo-favorita', 'aria-label': 'Favorita', text: '★' }) : null,
       el('div', { class: 'cartao-texto' }, el('div', { class: 'cartao-titulo', text: r.titulo })));
   }
   function itemLista(r) {
@@ -519,7 +549,7 @@ async function telaLista() {
     return el('a', { class: 'item-lista', href: `#/receita/${r.id}` },
       elementoCapa(urls[r.imagem_caminho], ''),
       el('div', { class: 'item-texto' },
-        el('div', { class: 'cartao-titulo', text: r.titulo }),
+        el('div', { class: 'cartao-titulo', text: (ehFavorita(r) ? '★ ' : '') + r.titulo }),
         info ? el('div', { class: 'cartao-info', text: info }) : null));
   }
 
@@ -532,6 +562,8 @@ async function telaLista() {
     const contagem = new Map();
     for (const r of achadas) contagem.set(r.categoria_id || 'sem', (contagem.get(r.categoria_id || 'sem') || 0) + 1);
     const abas = [{ id: 'todas', nome: 'Todas', qtd: achadas.length }];
+    const qtdFavoritas = achadas.filter(ehFavorita).length;
+    if (qtdFavoritas || (filtro === 'favoritas' && palavras.length)) abas.push({ id: 'favoritas', nome: '★ Favoritas', qtd: qtdFavoritas });
     for (const c of estado.categorias) {
       if (contagem.has(c.id) || c.id === filtro) abas.push({ id: c.id, nome: c.nome, qtd: contagem.get(c.id) || 0 });
     }
@@ -539,7 +571,7 @@ async function telaLista() {
     if (!abas.some(a => a.id === filtro)) filtro = 'todas';
 
     // 3) Receitas visíveis: busca + aba escolhida
-    const visiveis = achadas.filter(r => filtro === 'todas' || (r.categoria_id || 'sem') === filtro);
+    const visiveis = achadas.filter(r => filtro === 'todas' || (filtro === 'favoritas' ? ehFavorita(r) : (r.categoria_id || 'sem') === filtro));
     const aba = abas.find(a => a.id === filtro);
     titulo.textContent = filtro === 'todas'
       ? (palavras.length ? `Encontradas (${visiveis.length})` : `Minhas receitas (${data.length})`)
@@ -589,18 +621,50 @@ async function telaReceita(id) {
   const base = Number(r.porcoes) > 0 ? Number(r.porcoes) : null;
   let atual = base || 1;
   const fator = () => atual / (base || 1);
-  const valorPorcoes = el('span', { class: 'porcoes-valor', 'aria-live': 'polite' });
+  const valorPorcoes = el('button', { class: 'porcoes-valor', type: 'button', 'aria-live': 'polite',
+    title: 'Toque para digitar', 'aria-label': base ? 'Porções: toque para digitar' : 'Receita: toque para digitar' });
+  const campoPorcoes = el('input', { class: 'porcoes-campo', type: 'text', inputmode: 'decimal', enterkeyhint: 'done',
+    maxlength: 8, hidden: true, 'aria-label': base ? 'Quantas porções?' : 'Multiplicar a receita por' });
+  const minimo = () => (base || 1) / 4, maximo = () => (base || 1) * 20;
+  valorPorcoes.addEventListener('click', () => {
+    campoPorcoes.value = formatarNumero(atual);
+    valorPorcoes.hidden = true; campoPorcoes.hidden = false;
+    campoPorcoes.focus(); campoPorcoes.select();
+  });
+  let cancelarDigitacao = false;
+  function aplicarDigitado() {
+    if (campoPorcoes.hidden) return;
+    const v = lerQuantidade(campoPorcoes.value.replace(/x$/i, ''));
+    campoPorcoes.hidden = true; valorPorcoes.hidden = false;
+    if (cancelarDigitacao) { cancelarDigitacao = false; return; }
+    if (v === null || Number.isNaN(v)) { avisoPorcoes.textContent = 'Use um número, ex.: 30, 2,5 ou 1/2.'; return; }
+    atual = Math.min(maximo(), Math.max(minimo(), Math.round(v * 1000) / 1000));
+    desenharIngredientes();
+    if (v > maximo() || v < minimo()) avisoPorcoes.textContent = `Ajustado para ${formatarNumero(atual)} (limite de 1/4 a 20 vezes a receita).`;
+  }
+  campoPorcoes.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); aplicarDigitado(); }
+    if (ev.key === 'Escape') { cancelarDigitacao = true; aplicarDigitado(); }
+  });
+  campoPorcoes.addEventListener('blur', aplicarDigitado);
   const avisoPorcoes = el('span', { class: 'porcoes-aviso' });
   const botaoMenos = el('button', { class: 'botao pequeno', type: 'button', 'aria-label': base ? 'Menos porções' : 'Diminuir receita' }, '−');
   const botaoMais = el('button', { class: 'botao pequeno', type: 'button', 'aria-label': base ? 'Mais porções' : 'Aumentar receita' }, '+');
   const botaoOriginal = el('button', { class: 'botao pequeno', type: 'button', hidden: true }, 'Original');
   const passo = () => (base && base % 1 === 0) ? 1 : (base ? base / 2 : 0.5);
-  botaoMenos.addEventListener('click', () => { if (atual - passo() >= passo() - 1e-9) { atual = Math.round((atual - passo()) * 1000) / 1000; desenharIngredientes(); } });
-  botaoMais.addEventListener('click', () => { if (atual < (base ? base * 20 : 20)) { atual = Math.round((atual + passo()) * 1000) / 1000; desenharIngredientes(); } });
+  botaoMenos.addEventListener('click', () => {
+    // valor digitado fora do passo (ex.: 2,5): desce para o inteiro abaixo
+    const alvo = Math.abs(atual / passo() - Math.round(atual / passo())) > 1e-9 ? Math.floor(atual / passo()) * passo() : atual - passo();
+    if (alvo >= passo() - 1e-9) { atual = Math.round(alvo * 1000) / 1000; desenharIngredientes(); }
+  });
+  botaoMais.addEventListener('click', () => {
+    const alvo = Math.abs(atual / passo() - Math.round(atual / passo())) > 1e-9 ? Math.ceil(atual / passo()) * passo() : atual + passo();
+    if (alvo <= maximo() + 1e-9) { atual = Math.round(alvo * 1000) / 1000; desenharIngredientes(); }
+  });
   botaoOriginal.addEventListener('click', () => { atual = base || 1; desenharIngredientes(); });
   const seletorPorcoes = el('div', { class: 'porcoes' },
     el('span', { class: 'porcoes-rotulo', text: base ? 'Porções' : 'Receita' }),
-    botaoMenos, valorPorcoes, botaoMais, botaoOriginal, avisoPorcoes);
+    botaoMenos, valorPorcoes, campoPorcoes, botaoMais, botaoOriginal, avisoPorcoes);
 
   // Ingredientes agrupados (massa, recheio...) na ordem salva. Toque risca o item.
   const listaIng = el('ul', { class: 'ingredientes' });
@@ -628,6 +692,22 @@ async function telaReceita(id) {
   }
   desenharIngredientes();
 
+  // Favorita (versão 13)
+  const botaoFavorita = el('button', { class: 'botao pequeno', type: 'button' });
+  const desenharFavorita = () => {
+    const f = ehFavorita(r);
+    botaoFavorita.textContent = f ? '★ Favorita' : '☆ Favoritar';
+    botaoFavorita.setAttribute('aria-pressed', f ? 'true' : 'false');
+    botaoFavorita.classList.toggle('selecionado', f);
+  };
+  botaoFavorita.addEventListener('click', async () => {
+    botaoFavorita.disabled = true;
+    await alternarFavorita(r);
+    botaoFavorita.disabled = false;
+    desenharFavorita();
+  });
+  desenharFavorita();
+
   // Tela acesa (versão 12): Screen Wake Lock, quando o navegador permite.
   const botaoTela = 'wakeLock' in navigator
     ? el('button', { class: 'botao pequeno', type: 'button', 'aria-pressed': 'false', onclick: () => alternarTelaAcesa(botaoTela) }, '☀ Manter tela acesa')
@@ -644,7 +724,7 @@ async function telaReceita(id) {
     el('h1', { text: r.titulo }),
     resumo.length ? el('div', { class: 'resumo' }, resumo.map(t => el('span', { text: t }))) : null,
     r.etiquetas.length ? el('div', { class: 'etiquetas' }, r.etiquetas.map(t => el('span', { class: 'etiqueta', text: t }))) : null,
-    botaoTela ? el('div', { class: 'acoes acoes-topo' }, botaoTela) : null,
+    el('div', { class: 'acoes acoes-topo' }, botaoFavorita, botaoTela),
     el('h2', { text: 'Ingredientes' }),
     r.ingredientes.some(i => i.quantidade !== null && i.quantidade !== undefined) ? seletorPorcoes : null,
     r.ingredientes.length ? listaIng : el('p', { class: 'aviso', text: 'Sem ingredientes.' }),
@@ -1569,6 +1649,8 @@ async function telaAjustes() {
       }, 'Sair')),
     el('p', { class: 'ajuda', text: 'Sair apaga a cópia guardada neste aparelho.' }),
     status,
+    estado.titular ? el('div', {}, el('h2', { text: 'Categorias' }),
+      el('a', { class: 'botao', href: '#/categorias' }, 'Editar categorias')) : null,
     estado.titular ? secaoLeitores() : null
   ));
 }
@@ -1582,13 +1664,13 @@ async function rotear() {
   topo.hidden = false;
   const rota = location.hash.replace(/^#/, '') || '/';
   const partes = rota.split('/').filter(Boolean);
-  if (!estado.titular && ['nova', 'manual', 'editar', 'revisar'].includes(partes[0])) {
+  if (!estado.titular && ['nova', 'manual', 'editar', 'revisar', 'categorias'].includes(partes[0])) {
     return mostrar(el('section', {},
       el('p', {}, el('a', { href: '#/' }, '← Voltar')),
       el('h1', { text: 'Conta só de leitura' }),
       el('p', { class: 'aviso', text: 'Você pode ver, buscar e compartilhar as receitas. Cadastrar, importar e editar é só para o dono do app.' })));
   }
-  if (estado.semConexao && ['nova', 'manual', 'editar', 'revisar'].includes(partes[0])) {
+  if (estado.semConexao && ['nova', 'manual', 'editar', 'revisar', 'categorias'].includes(partes[0])) {
     return mostrar(el('section', {},
       el('p', {}, el('a', { href: '#/' }, '← Voltar')),
       el('h1', { text: 'Precisa de internet' }),
@@ -1603,10 +1685,74 @@ async function rotear() {
     if (partes[0] === 'manual') return await telaFormulario(null);
     if (partes[0] === 'revisar') return await telaRevisao();
     if (partes[0] === 'ajustes') return telaAjustes();
+    if (partes[0] === 'categorias') return await telaCategorias();
     return await telaLista();
   } catch (e) {
     mensagem(erroAmigavel(e), 'erro');
   }
+}
+
+/** Categorias (versão 13, só o titular): criar, renomear e remover.
+ *  Remover move as receitas para "Outras" (função remover_categoria, script 10). */
+async function telaCategorias() {
+  const status = el('div', { class: 'status', role: 'status' });
+  const lista = el('div');
+  const contagem = new Map();
+  for (const r of estado.colecao?.receitas || []) contagem.set(r.categoria_id, (contagem.get(r.categoria_id) || 0) + 1);
+  const recarregar = async (msg) => {
+    try { await atualizarColecao(); } catch (e) { status.textContent = erroAmigavel(e); return; }
+    await telaCategorias();
+    if (msg) document.querySelector('.categorias-status').textContent = msg;
+  };
+  const erroCategoria = (e) => /duplicate|23505|categorias_dono_nome/.test(`${e.message} ${e.code}`)
+    ? 'Já existe uma categoria com esse nome.' : erroAmigavel(e);
+  for (const c of estado.categorias) {
+    const outras = c.nome.toLowerCase() === 'outras';
+    const nome = el('input', { type: 'text', maxlength: 40, value: c.nome, 'aria-label': `Nome da categoria ${c.nome}`, disabled: outras });
+    const salvar = el('button', { class: 'botao pequeno', type: 'button', hidden: true }, 'Salvar');
+    nome.addEventListener('input', () => { salvar.hidden = nome.value.trim() === c.nome; });
+    salvar.addEventListener('click', async () => {
+      const novo = nome.value.trim().replace(/\s+/g, ' ');
+      if (!novo) { status.textContent = 'O nome não pode ficar vazio.'; return; }
+      if (novo.toLowerCase() === 'outras') { status.textContent = 'O nome "Outras" é reservado.'; return; }
+      salvar.disabled = true;
+      const { error } = await sb.from('categorias').update({ nome: novo }).eq('id', c.id);
+      if (error) { status.textContent = erroCategoria(error); salvar.disabled = false; return; }
+      recarregar(`"${c.nome}" agora é "${novo}".`);
+    });
+    const qtd = contagem.get(c.id) || 0;
+    const remover = outras ? null : el('button', { class: 'botao pequeno perigo', type: 'button', 'aria-label': `Remover ${c.nome}`,
+      onclick: async () => {
+        if (!confirm(qtd ? `Remover "${c.nome}"? As ${qtd} receita(s) dela vão para "Outras".` : `Remover "${c.nome}"?`)) return;
+        const { data, error } = await sb.rpc('remover_categoria', { p_id: c.id });
+        if (error) { status.textContent = /remover_categoria/.test(error.message || '') ? 'Rode o script 10 no Supabase.' : erroAmigavel(error); return; }
+        if (lerPreferencia('categoria', 'todas') === c.id) gravarPreferencia('categoria', 'todas');
+        recarregar(`"${c.nome}" removida${data ? `; ${data} receita(s) foram para "Outras"` : ''}.`);
+      } }, 'Remover');
+    lista.append(el('div', { class: 'linha-categoria' },
+      nome, el('span', { class: 'categoria-qtd', text: String(qtd) }), salvar, remover));
+  }
+  const nova = el('input', { type: 'text', maxlength: 40, placeholder: 'Nova categoria (ex.: Fit)', 'aria-label': 'Nova categoria' });
+  const adicionar = el('button', { class: 'botao', type: 'button' }, 'Adicionar');
+  adicionar.addEventListener('click', async () => {
+    const nome = nova.value.trim().replace(/\s+/g, ' ');
+    if (!nome) { status.textContent = 'Digite o nome da categoria.'; return; }
+    if (estado.categorias.length >= 40) { status.textContent = 'Limite de 40 categorias.'; return; }
+    adicionar.disabled = true;
+    const ordem = Math.max(0, ...estado.categorias.map(c => c.ordem || 0)) + 1;
+    const { error } = await sb.from('categorias').insert({ nome, ordem });
+    adicionar.disabled = false;
+    if (error) { status.textContent = erroCategoria(error); return; }
+    recarregar(`"${nome}" criada.`);
+  });
+  status.classList.add('categorias-status');
+  mostrar(el('section', {},
+    el('p', {}, el('a', { href: '#/ajustes' }, '← Ajustes')),
+    el('h1', { text: 'Categorias' }),
+    el('p', { class: 'ajuda', text: 'Renomeie tocando no nome. Remover não apaga receitas: elas vão para "Outras". O número ao lado é a quantidade de receitas.' }),
+    lista,
+    el('div', { class: 'linha-autorizar' }, nova, adicionar),
+    status));
 }
 
 /** Ajustes do titular: e-mails de amigos e família que podem ver as receitas (versão 11). */

@@ -24,6 +24,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/07-bebidas-e-drinks.sql` | "Bebidas" passa a "Bebidas e Drinks" |
 | `supabase/08-grupos-no-preparo.sql` | Grupos (Massa, Recheio...) também no modo de preparo |
 | `supabase/09-compartilhar-leitura.sql` | Titular grava; amigos e família autorizados (tabela `leitores`) só leem |
+| `supabase/10-favoritas-e-categorias.sql` | Favorita não muda a data da receita; função `remover_categoria` (move receitas para Outras) |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que lê o link (site, YouTube, TikTok, Instagram) e envia link, legenda, imagens e áudio ao Gemini, devolvendo a receita |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
 
