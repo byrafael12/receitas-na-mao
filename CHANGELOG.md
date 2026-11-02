@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## Versão 9.1 (02/11/2026): correção de arquivos do Controle Financeiro enviados por engano
+
+- Em 01/11/2026 o commit "Versão 36: receitas previstas" (do Controle Financeiro) foi enviado a este repositório: trocou o `index.html` e instalou o `sw.js` (service worker) do outro app, que passou a abrir no lugar do Receitas na mão.
+- `index.html` do Receitas na mão restaurado.
+- `sw.js` substituído por um "desligador": apaga só o que foi guardado para /receitas-na-mao/, se desliga e recarrega. Pode ser apagado em dezembro/2026.
+- `app.js` desliga qualquer service worker no endereço /receitas-na-mao/ ao abrir (não mexe no do Controle Financeiro).
+- `05-contas-fixas-receitas.sql` e `Codigo.gs` da raiz apagados (eram do Controle Financeiro).
+
 ## Versão 9 (01/11/2026), Entrega 3: importar por link
 
 - **Campo Link** no topo da tela Nova receita. Pode ir sozinho ou junto com legenda, prints e vídeo.

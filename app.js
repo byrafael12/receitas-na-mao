@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '9';
+const VERSAO = '9.1';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -1193,7 +1193,19 @@ async function rotear() {
   }
 }
 
+/** Desliga service worker instalado por engano no endereço deste app
+ *  (o do Controle Financeiro, em 01/11/2026). Não mexe no de outros apps. */
+function desligarServiceWorkerIntruso() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.getRegistrations().then(registros => {
+    for (const r of registros) {
+      if (new URL(r.scope).pathname.startsWith('/receitas-na-mao/')) r.unregister();
+    }
+  }).catch(() => {});
+}
+
 async function iniciar() {
+  desligarServiceWorkerIntruso();
   // Retorno do Google com erro (ex.: conta não autorizada).
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const erroLogin = params.get('error_description') || new URLSearchParams(location.search).get('error_description');

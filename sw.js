@@ -1,49 +1,29 @@
-/* Controle Financeiro: service worker (Entrega 6; versão 24).
-   Guarda no aparelho os arquivos do app para ele abrir mesmo sem internet.
-   - Página (index.html): busca na internet primeiro (para receber versões novas) e usa a cópia se não houver rede.
-   - Bibliotecas, ícones e manifesto: usa a cópia guardada e atualiza em segundo plano.
-   - Dados do Supabase NÃO passam por aqui (outro endereço): ficam no IndexedDB, cuidados pelo próprio app.
-   Ao publicar uma versão nova, troque VERSAO para o aparelho baixar tudo de novo. */
-const VERSAO = "cf-v36";
-const ARQUIVOS = ["./", "./index.html", "./lib/supabase.js", "./manifest.webmanifest",
-  "./icone-192.png", "./icone-512.png", "./apple-touch-icon.png"];
+// Receitas na mão · sw.js "desligador" (02/11/2026)
+//
+// Em 01/11/2026 o service worker do app Controle Financeiro foi enviado
+// por engano para este repositório e ficou instalado nos aparelhos,
+// mostrando o outro app no lugar deste. Este arquivo o substitui: quando
+// o navegador busca a atualização, ele se instala, apaga só o que foi
+// guardado para /receitas-na-mao/, se desliga e recarrega a página.
+// O Receitas na mão não usa service worker (a leitura offline fica para a
+// Entrega 4). Pode apagar este arquivo do repositório em dezembro/2026.
 
-self.addEventListener("install", evento => {
-  evento.waitUntil(caches.open(VERSAO).then(c => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));
-});
+self.addEventListener('install', () => self.skipWaiting());
 
-self.addEventListener("activate", evento => {
-  evento.waitUntil(
-    caches.keys()
-      .then(nomes => Promise.all(nomes.filter(n => n !== VERSAO).map(n => caches.delete(n))))
-      .then(() => self.clients.claim())
-  );
-});
-
-self.addEventListener("fetch", evento => {
-  const pedido = evento.request;
-  if (pedido.method !== "GET") return;
-  const url = new URL(pedido.url);
-  if (url.origin !== self.location.origin) return; // Supabase e outros: direto pela rede
-
-  const ehPagina = pedido.mode === "navigate" || url.pathname.endsWith("/") || url.pathname.endsWith("/index.html");
-  if (ehPagina) {
-    // Rede primeiro; sem rede, a última página guardada
-    evento.respondWith(
-      fetch(pedido)
-        .then(resposta => {
-          if (resposta.ok) { const copia = resposta.clone(); caches.open(VERSAO).then(c => c.put("./index.html", copia)); }
-          return resposta;
-        })
-        .catch(() => caches.match("./index.html").then(r => r || caches.match("./")))
-    );
-    return;
-  }
-  // Arquivos fixos: cópia guardada primeiro, rede como reserva
-  evento.respondWith(
-    caches.match(pedido).then(guardado => guardado || fetch(pedido).then(resposta => {
-      if (resposta.ok) { const copia = resposta.clone(); caches.open(VERSAO).then(c => c.put(pedido, copia)); }
-      return resposta;
-    }))
-  );
+self.addEventListener('activate', (evento) => {
+  evento.waitUntil((async () => {
+    try {
+      for (const nome of await caches.keys()) {
+        const cache = await caches.open(nome);
+        for (const pedido of await cache.keys()) {
+          if (new URL(pedido.url).pathname.startsWith('/receitas-na-mao/')) await cache.delete(pedido);
+        }
+      }
+    } catch { /* segue para desligar mesmo assim */ }
+    await self.registration.unregister();
+    const janelas = await self.clients.matchAll({ type: 'window' });
+    for (const janela of janelas) {
+      try { await janela.navigate(janela.url); } catch { /* o usuário recarrega */ }
+    }
+  })());
 });
