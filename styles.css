@@ -182,3 +182,14 @@ input[type="file"] { max-width: 100%; }
 
 /* Compartilhar (versão 11) */
 .linha-autorizar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; }
+
+/* Na cozinha (versão 12): porções, tela acesa, riscar itens */
+.porcoes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.porcoes .botao.pequeno { min-width: 44px; font-size: 1.1rem; }
+.porcoes-rotulo { font-weight: 600; }
+.porcoes-valor { min-width: 2.5em; text-align: center; font-weight: 700; font-size: 1.1rem; }
+.porcoes-aviso { flex-basis: 100%; font-size: 0.8rem; color: var(--texto-suave); }
+.porcoes-aviso:empty { display: none; }
+.acoes-topo { margin-top: 8px; }
+.marcavel { cursor: pointer; }
+.feito { text-decoration: line-through; opacity: 0.5; }

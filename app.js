@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '11';
+const VERSAO = '12';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -114,6 +114,23 @@ function formatarQuantidade(n) {
   const f = FRACOES.find(([a, b]) => Math.abs(resto - a / b) < 0.01);
   if (!f) return formatarNumero(v);
   return (inteiro ? `${inteiro} ` : '') + `${f[0]}/${f[1]}`;
+}
+
+/** Quantidade recalculada (porções): arredonda para medida de cozinha.
+ *  10 ou mais vira número inteiro (333,3 g -> 333); abaixo disso, a fração
+ *  comum mais próxima (1/2, 1/3, 1/4, 1/8; erro até 6%), ou uma casa decimal. */
+function formatarEscalada(n) {
+  if (n === null || n === undefined) return '';
+  const v = Number(n);
+  if (v >= 10) return formatarNumero(Math.round(v));
+  let melhor = null;
+  for (const d of [1, 2, 3, 4, 8]) { // metades, terços, quartos e oitavos
+    const c = Math.round(v * d) / d;
+    const erro = c > 0 ? Math.abs(c - v) / v : 1;
+    if (erro <= 0.06 && (!melhor || erro < melhor.erro - 1e-9)) melhor = { c, erro };
+  }
+  if (melhor) return formatarQuantidade(melhor.c);
+  return formatarNumero(Math.round(v * 10) / 10);
 }
 
 const FRACOES_UNICODE = { '½': ' 1/2', '⅓': ' 1/3', '⅔': ' 2/3', '¼': ' 1/4', '¾': ' 3/4', '⅛': ' 1/8', '⅜': ' 3/8', '⅝': ' 5/8', '⅞': ' 7/8' };
@@ -563,25 +580,58 @@ async function telaReceita(id) {
 
   const resumo = [
     nomeCategoria(r.categoria_id),
-    r.porcoes ? `${formatarNumero(r.porcoes)} porções` : null,
-    r.tempo_preparo_min !== null ? `Preparo: ${minutosTexto(r.tempo_preparo_min)}` : null,
-    r.tempo_total_min !== null ? `Total: ${minutosTexto(r.tempo_total_min)}` : null
+    r.tempo_preparo_min != null ? `Preparo: ${minutosTexto(r.tempo_preparo_min)}` : null,
+    r.tempo_total_min != null ? `Total: ${minutosTexto(r.tempo_total_min)}` : null
   ].filter(Boolean);
 
-  // Ingredientes agrupados (massa, recheio...) na ordem salva.
+  // Porções (versão 12): muda só a visualização, não altera a receita salva.
+  // Com porções cadastradas, o seletor mostra porções; sem elas, multiplica (1x, 2x...).
+  const base = Number(r.porcoes) > 0 ? Number(r.porcoes) : null;
+  let atual = base || 1;
+  const fator = () => atual / (base || 1);
+  const valorPorcoes = el('span', { class: 'porcoes-valor', 'aria-live': 'polite' });
+  const avisoPorcoes = el('span', { class: 'porcoes-aviso' });
+  const botaoMenos = el('button', { class: 'botao pequeno', type: 'button', 'aria-label': base ? 'Menos porções' : 'Diminuir receita' }, '−');
+  const botaoMais = el('button', { class: 'botao pequeno', type: 'button', 'aria-label': base ? 'Mais porções' : 'Aumentar receita' }, '+');
+  const botaoOriginal = el('button', { class: 'botao pequeno', type: 'button', hidden: true }, 'Original');
+  const passo = () => (base && base % 1 === 0) ? 1 : (base ? base / 2 : 0.5);
+  botaoMenos.addEventListener('click', () => { if (atual - passo() >= passo() - 1e-9) { atual = Math.round((atual - passo()) * 1000) / 1000; desenharIngredientes(); } });
+  botaoMais.addEventListener('click', () => { if (atual < (base ? base * 20 : 20)) { atual = Math.round((atual + passo()) * 1000) / 1000; desenharIngredientes(); } });
+  botaoOriginal.addEventListener('click', () => { atual = base || 1; desenharIngredientes(); });
+  const seletorPorcoes = el('div', { class: 'porcoes' },
+    el('span', { class: 'porcoes-rotulo', text: base ? 'Porções' : 'Receita' }),
+    botaoMenos, valorPorcoes, botaoMais, botaoOriginal, avisoPorcoes);
+
+  // Ingredientes agrupados (massa, recheio...) na ordem salva. Toque risca o item.
   const listaIng = el('ul', { class: 'ingredientes' });
-  let grupoAtual = null;
-  for (const i of r.ingredientes) {
-    if ((i.grupo || null) !== grupoAtual) {
-      grupoAtual = i.grupo || null;
-      if (grupoAtual) listaIng.append(el('li', { class: 'grupo-titulo', text: grupoAtual }));
-    }
-    const qtd = [i.quantidade !== null ? formatarQuantidade(i.quantidade) : null, i.unidade].filter(Boolean).join(' ');
-    listaIng.append(el('li', {},
-      qtd ? el('span', { class: 'quantidade', text: qtd + ' ' }) : null,
-      i.nome,
-      i.observacao ? ` (${i.observacao})` : null));
+  function desenharIngredientes() {
+    const f = fator();
+    valorPorcoes.textContent = base ? formatarNumero(atual) : `${formatarNumero(atual)}x`;
+    botaoOriginal.hidden = Math.abs(f - 1) < 1e-9;
+    avisoPorcoes.textContent = Math.abs(f - 1) < 1e-9 ? '' : 'quantidades recalculadas; "a gosto" não muda';
+    const riscados = new Set([...listaIng.querySelectorAll('li.feito')].map(li => li.dataset.n));
+    listaIng.replaceChildren();
+    let grupoAtual = null;
+    r.ingredientes.forEach((i, n) => {
+      if ((i.grupo || null) !== grupoAtual) {
+        grupoAtual = i.grupo || null;
+        if (grupoAtual) listaIng.append(el('li', { class: 'grupo-titulo', text: grupoAtual }));
+      }
+      const q = i.quantidade !== null && i.quantidade !== undefined
+        ? (Math.abs(f - 1) < 1e-9 ? formatarQuantidade(i.quantidade) : formatarEscalada(i.quantidade * f)) : null;
+      const qtd = [q, i.unidade].filter(Boolean).join(' ');
+      listaIng.append(el('li', { class: 'marcavel' + (riscados.has(String(n)) ? ' feito' : ''), 'data-n': n, onclick: (ev) => ev.currentTarget.classList.toggle('feito') },
+        qtd ? el('span', { class: 'quantidade', text: qtd + ' ' }) : null,
+        i.nome,
+        i.observacao ? ` (${i.observacao})` : null));
+    });
   }
+  desenharIngredientes();
+
+  // Tela acesa (versão 12): Screen Wake Lock, quando o navegador permite.
+  const botaoTela = 'wakeLock' in navigator
+    ? el('button', { class: 'botao pequeno', type: 'button', 'aria-pressed': 'false', onclick: () => alternarTelaAcesa(botaoTela) }, '☀ Manter tela acesa')
+    : null;
 
   const link = linkSeguro(r.fonte_url);
   const fonte = (link || r.fonte_autor) ? el('p', { class: 'fonte' }, 'Fonte: ',
@@ -594,7 +644,9 @@ async function telaReceita(id) {
     el('h1', { text: r.titulo }),
     resumo.length ? el('div', { class: 'resumo' }, resumo.map(t => el('span', { text: t }))) : null,
     r.etiquetas.length ? el('div', { class: 'etiquetas' }, r.etiquetas.map(t => el('span', { class: 'etiqueta', text: t }))) : null,
+    botaoTela ? el('div', { class: 'acoes acoes-topo' }, botaoTela) : null,
     el('h2', { text: 'Ingredientes' }),
+    r.ingredientes.some(i => i.quantidade !== null && i.quantidade !== undefined) ? seletorPorcoes : null,
     r.ingredientes.length ? listaIng : el('p', { class: 'aviso', text: 'Sem ingredientes.' }),
     (r.utensilios || []).length ? el('h2', { text: 'Utensílios' }) : null,
     (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
@@ -604,21 +656,65 @@ async function telaReceita(id) {
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
     el('div', { class: 'acoes' },
-      el('button', { class: 'botao', type: 'button', onclick: () => compartilharReceita(r) }, 'Compartilhar'),
-      el('button', { class: 'botao', type: 'button', onclick: (ev) => copiarReceita(r, ev.currentTarget) }, 'Copiar texto'),
+      el('button', { class: 'botao', type: 'button', onclick: () => compartilharReceita(r, fator()) }, 'Compartilhar'),
+      el('button', { class: 'botao', type: 'button', onclick: (ev) => copiarReceita(r, ev.currentTarget, fator()) }, 'Copiar texto'),
       estado.titular ? el('a', { class: 'botao', href: `#/editar/${r.id}` }, 'Editar') : null,
       estado.titular ? el('button', { class: 'botao perigo', type: 'button', onclick: () => excluirReceita(r) }, 'Excluir') : null)
   ));
 }
 
 // ---------------------------------------------------------------------
+// Tela acesa durante o preparo (versão 12)
+// O navegador solta o bloqueio quando o app vai para segundo plano; ao
+// voltar, pedimos de novo. Ao sair da receita, a tela volta ao normal.
+// ---------------------------------------------------------------------
+let telaAcesa = null;          // bloqueio ativo (WakeLockSentinel)
+let querTelaAcesa = false;     // o usuário ligou na receita aberta
+let botaoTelaAtual = null;
+
+function mostrarEstadoTela() {
+  if (!botaoTelaAtual) return;
+  const ligada = !!telaAcesa && !telaAcesa.released;
+  botaoTelaAtual.textContent = ligada ? '☀ Tela acesa ✓' : '☀ Manter tela acesa';
+  botaoTelaAtual.setAttribute('aria-pressed', ligada ? 'true' : 'false');
+  botaoTelaAtual.classList.toggle('selecionado', ligada);
+}
+async function pedirTelaAcesa() {
+  try {
+    telaAcesa = await navigator.wakeLock.request('screen');
+    telaAcesa.addEventListener('release', mostrarEstadoTela);
+  } catch {
+    telaAcesa = null;
+    if (botaoTelaAtual) botaoTelaAtual.textContent = '☀ Não deu (bateria fraca?)';
+  }
+  mostrarEstadoTela();
+}
+async function alternarTelaAcesa(botao) {
+  botaoTelaAtual = botao;
+  if (telaAcesa && !telaAcesa.released) { querTelaAcesa = false; await telaAcesa.release(); telaAcesa = null; mostrarEstadoTela(); return; }
+  querTelaAcesa = true;
+  await pedirTelaAcesa();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && querTelaAcesa && (!telaAcesa || telaAcesa.released)) pedirTelaAcesa();
+});
+window.addEventListener('hashchange', () => {
+  if (!location.hash.startsWith('#/receita/')) {
+    querTelaAcesa = false; botaoTelaAtual = null;
+    if (telaAcesa && !telaAcesa.released) telaAcesa.release().catch(() => {});
+    telaAcesa = null;
+  }
+});
+
+// ---------------------------------------------------------------------
 // Compartilhar uma receita (versão 11): texto pronto para WhatsApp
 // ---------------------------------------------------------------------
 
 /** Receita em texto simples (negrito no padrão do WhatsApp: *texto*). */
-function textoDaReceita(r) {
+function textoDaReceita(r, fator = 1) {
+  const escalado = Math.abs(fator - 1) > 1e-9;
   const linhas = [`*${r.titulo}*`];
-  const resumo = [r.porcoes ? `${formatarNumero(r.porcoes)} porções` : null,
+  const resumo = [r.porcoes ? `${formatarNumero(Math.round(r.porcoes * fator * 1000) / 1000)} porções` : (escalado ? `Receita ${formatarNumero(fator)}x` : null),
     r.tempo_preparo_min ? `Preparo: ${minutosTexto(r.tempo_preparo_min)}` : null,
     r.tempo_total_min ? `Total: ${minutosTexto(r.tempo_total_min)}` : null].filter(Boolean).join(' · ');
   if (resumo) linhas.push(resumo);
@@ -627,7 +723,8 @@ function textoDaReceita(r) {
     let grupo = null;
     for (const i of r.ingredientes) {
       if ((i.grupo || null) !== grupo) { grupo = i.grupo || null; if (grupo) linhas.push(`_${grupo}_`); }
-      const qtd = [i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : null, i.unidade].filter(Boolean).join(' ');
+      const temQtd = i.quantidade !== null && i.quantidade !== undefined;
+      const qtd = [temQtd ? (escalado ? formatarEscalada(i.quantidade * fator) : formatarQuantidade(i.quantidade)) : null, i.unidade].filter(Boolean).join(' ');
       linhas.push(`• ${qtd ? qtd + ' ' : ''}${i.nome}${i.observacao ? ` (${i.observacao})` : ''}`);
     }
   }
@@ -648,8 +745,8 @@ function textoDaReceita(r) {
 }
 
 /** Abre o compartilhamento do aparelho (WhatsApp, e-mail...); sem ele, abre o WhatsApp. */
-async function compartilharReceita(r) {
-  const texto = textoDaReceita(r);
+async function compartilharReceita(r, fator = 1) {
+  const texto = textoDaReceita(r, fator);
   if (navigator.share) {
     try { await navigator.share({ title: r.titulo, text: texto }); return; }
     catch (e) { if (e && e.name === 'AbortError') return; /* sem suporte: segue para o WhatsApp */ }
@@ -657,9 +754,9 @@ async function compartilharReceita(r) {
   window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
 }
 
-async function copiarReceita(r, botao) {
+async function copiarReceita(r, botao, fator = 1) {
   try {
-    await navigator.clipboard.writeText(textoDaReceita(r));
+    await navigator.clipboard.writeText(textoDaReceita(r, fator));
     botao.textContent = 'Copiado ✓';
   } catch {
     botao.textContent = 'Não consegui copiar';
@@ -1022,7 +1119,8 @@ function passosAgrupados(passos) {
   }
   let numero = 1;
   return el('div', {}, blocos.map(b => {
-    const lista = el('ol', { class: 'passos', start: numero }, b.itens.map(t => el('li', { text: t })));
+    const lista = el('ol', { class: 'passos', start: numero }, b.itens.map(t =>
+      el('li', { class: 'marcavel', text: t, onclick: (ev) => ev.currentTarget.classList.toggle('feito') })));
     numero += b.itens.length;
     return el('div', {}, b.grupo ? el('div', { class: 'grupo-titulo', text: b.grupo }) : null, lista);
   }));

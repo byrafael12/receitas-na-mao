@@ -1,5 +1,15 @@
 # Histórico de versões
 
+## Versão 12 (02/11/2026), Entrega 4: na cozinha
+
+- **Porções com recálculo**: na receita, seletor **Porções − 4 +** acima dos ingredientes. As quantidades mudam na hora (4 para 8 dobra; "a gosto" não muda), com arredondamento de cozinha: 10 ou mais vira número inteiro (750 g), abaixo disso a fração mais próxima (1/2, 1/3, 3/4, 1/8). **Original** volta ao cadastrado. Só muda a visualização; a receita salva continua igual. Receita sem porções cadastradas: multiplicador (1x, 1,5x, 2x...).
+- **Compartilhar e Copiar texto** levam as quantidades da porção escolhida.
+- **Manter tela acesa**: botão na receita (☀) que impede a tela de apagar enquanto você cozinha. Volta a valer quando o app retorna do segundo plano e desliga ao sair da receita. Só aparece se o navegador tiver suporte.
+- **Riscar itens**: toque num ingrediente ou passo para riscar o que já foi feito; toque de novo para desfazer.
+- Correção: tempo vazio não aparece mais como "null".
+- Sem SQL, sem mudança na função da IA e no service worker.
+- Testes locais: cozinha 21 de 21, compartilhar 21 de 21, sem internet 17 de 17, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 11 (02/11/2026), Entrega 4: compartilhar com amigos e família
 
 - **Compartilhar receita** (opção A): botões **Compartilhar** e **Copiar texto** na receita. O texto sai pronto para o WhatsApp (título em negrito, porções e tempos, ingredientes e preparo com grupos, utensílios, observações, fonte com link). No iPhone e no Windows abre o compartilhamento do aparelho; sem ele, abre o WhatsApp. Funciona também sem internet.
