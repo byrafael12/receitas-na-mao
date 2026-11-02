@@ -1,5 +1,13 @@
 # Histórico de versões
 
+## Versão 8 (01/11/2026): busca e grade com 4 por linha
+
+- **Busca na tela inicial**: procura no nome, nos ingredientes, nas etiquetas, nos utensílios e no autor da receita, sem diferenciar acento nem maiúscula ("mucarela" acha "muçarela"). Com várias palavras, todas precisam aparecer ("molho lasanha"). Funciona junto com a aba de categoria; as abas mostram quantas receitas cada uma tem no resultado. O texto da busca continua ao voltar de uma receita.
+- **Grade com 4 receitas por linha no celular** (5 no tablet, 6 no notebook), capa quadrada, título menor em até 2 linhas.
+- Ingredientes e etiquetas são lidos em blocos de 1.000 linhas (limite por consulta do Supabase), para a busca não perder nada quando a coleção crescer.
+- Sem script SQL nesta versão.
+- Testes locais: lista e busca 30 de 30, cadastro 25 de 25, importação 30 de 30, áudio 7 de 7.
+
 ## Versão 7 (01/11/2026), Entrega 2: IA mais resistente e ajustes pedidos
 
 - **IA sobrecarregada (erro 503)**: a função espera 3 s e tenta de novo; se continuar, usa o modelo reserva `gemini-3.5-flash-lite` (também com cota gratuita) e tenta mais uma vez. Também vale para falta de cota (429). Tempo total limitado a 125 s. Mensagem clara se tudo falhar; o modelo usado fica em `importacoes.modelo_ia`.

@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '7';
+const VERSAO = '8';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -42,7 +42,8 @@ const estado = {
   categorias: [],
   etiquetas: [],
   urlsAssinadas: new Map(), // caminho da imagem -> { url, expira }
-  importacao: null          // receitas lidas pela IA aguardando revisão
+  importacao: null,         // receitas lidas pela IA aguardando revisão
+  busca: ''                 // texto da busca da tela inicial (mantido ao voltar)
 };
 
 const app = document.getElementById('app');
@@ -280,12 +281,41 @@ function gravarPreferencia(chave, valor) {
   try { localStorage.setItem('receitas.' + chave, valor); } catch { /* sem armazenamento */ }
 }
 
+/** Lê todas as linhas de uma tabela em blocos de 1.000 (o Supabase devolve no máximo 1.000 por consulta). */
+async function lerTudo(tabela, campos) {
+  const BLOCO = 1000, todas = [];
+  for (let de = 0; ; de += BLOCO) {
+    const { data, error } = await sb.from(tabela).select(campos).order('receita_id').range(de, de + BLOCO - 1);
+    if (error) return { data: null, error };
+    todas.push(...data);
+    if (data.length < BLOCO) return { data: todas, error: null };
+  }
+}
+
+/** Texto sem acento e em minúsculas, para a busca ("Pão" vira "pao"). */
+function normalizar(t) {
+  return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 async function telaLista() {
   mensagem('Carregando receitas…');
-  const { data, error } = await sb.from('receitas')
-    .select('id, titulo, porcoes, tempo_preparo_min, imagem_caminho, categoria_id')
-    .order('atualizada_em', { ascending: false });
-  if (error) return mensagem(erroAmigavel(error), 'erro');
+  const [rec, ing, ret] = await Promise.all([
+    sb.from('receitas')
+      .select('id, titulo, porcoes, tempo_preparo_min, imagem_caminho, categoria_id, utensilios, fonte_autor')
+      .order('atualizada_em', { ascending: false }),
+    lerTudo('ingredientes', 'receita_id, nome'),
+    lerTudo('receita_etiquetas', 'receita_id, etiqueta_id')
+  ]);
+  for (const x of [rec, ing, ret]) if (x.error) return mensagem(erroAmigavel(x.error), 'erro');
+  const data = rec.data;
+  try { await carregarEtiquetas(); } catch { /* busca segue sem etiquetas */ }
+
+  // Texto de busca de cada receita: nome, ingredientes, etiquetas, utensílios e autor.
+  const textoBusca = new Map(data.map(r => [r.id, [r.titulo, ...(r.utensilios || []), r.fonte_autor]]));
+  for (const i of ing.data) textoBusca.get(i.receita_id)?.push(i.nome);
+  const nomeEtiqueta = new Map(estado.etiquetas.map(e => [e.id, e.nome]));
+  for (const x of ret.data) textoBusca.get(x.receita_id)?.push(nomeEtiqueta.get(x.etiqueta_id));
+  for (const [id, partes] of textoBusca) textoBusca.set(id, normalizar(partes.filter(Boolean).join(' | ')));
 
   const urls = await urlsDasImagens(data.map(r => r.imagem_caminho));
   const titulo = el('h1');
@@ -298,16 +328,13 @@ async function telaLista() {
     return mostrar(cabecalho, el('p', { class: 'aviso', text: 'Nenhuma receita ainda. Toque em "+ Nova" para cadastrar a primeira.' }));
   }
 
-  // Abas de categoria: "Todas" + só as categorias que têm receitas, com a contagem.
-  const contagem = new Map();
-  for (const r of data) contagem.set(r.categoria_id || 'sem', (contagem.get(r.categoria_id || 'sem') || 0) + 1);
-  const abas = [{ id: 'todas', nome: 'Todas', qtd: data.length }];
-  for (const c of estado.categorias) if (contagem.has(c.id)) abas.push({ id: c.id, nome: c.nome, qtd: contagem.get(c.id) });
-  if (contagem.has('sem')) abas.push({ id: 'sem', nome: 'Sem categoria', qtd: contagem.get('sem') });
-
   let filtro = lerPreferencia('categoria', 'todas');
-  if (!abas.some(a => a.id === filtro)) filtro = 'todas';
   let visao = lerPreferencia('visao', 'grade');
+  const campoBusca = el('input', {
+    type: 'search', class: 'busca', value: estado.busca || '', maxlength: 100, enterkeyhint: 'search',
+    placeholder: 'Buscar por nome, ingrediente, etiqueta…', 'aria-label': 'Buscar receitas'
+  });
+  campoBusca.addEventListener('input', () => { estado.busca = campoBusca.value; desenhar(); });
 
   const barraAbas = el('div', { class: 'abas', role: 'tablist', 'aria-label': 'Categorias' });
   const botoesVisao = el('div', { class: 'alternar-visao', role: 'group', 'aria-label': 'Visão' });
@@ -329,9 +356,27 @@ async function telaLista() {
   }
 
   function desenhar() {
-    const visiveis = data.filter(r => filtro === 'todas' || (r.categoria_id || 'sem') === filtro);
+    // 1) Busca: todas as palavras digitadas precisam aparecer (em qualquer campo).
+    const palavras = normalizar(estado.busca).split(/\s+/).filter(Boolean);
+    const achadas = palavras.length ? data.filter(r => palavras.every(p => textoBusca.get(r.id).includes(p))) : data;
+
+    // 2) Abas: "Todas" + categorias com receitas no resultado, com a contagem.
+    const contagem = new Map();
+    for (const r of achadas) contagem.set(r.categoria_id || 'sem', (contagem.get(r.categoria_id || 'sem') || 0) + 1);
+    const abas = [{ id: 'todas', nome: 'Todas', qtd: achadas.length }];
+    for (const c of estado.categorias) {
+      if (contagem.has(c.id) || c.id === filtro) abas.push({ id: c.id, nome: c.nome, qtd: contagem.get(c.id) || 0 });
+    }
+    if (contagem.has('sem') || filtro === 'sem') abas.push({ id: 'sem', nome: 'Sem categoria', qtd: contagem.get('sem') || 0 });
+    if (!abas.some(a => a.id === filtro)) filtro = 'todas';
+
+    // 3) Receitas visíveis: busca + aba escolhida
+    const visiveis = achadas.filter(r => filtro === 'todas' || (r.categoria_id || 'sem') === filtro);
     const aba = abas.find(a => a.id === filtro);
-    titulo.textContent = filtro === 'todas' ? `Minhas receitas (${data.length})` : `${aba.nome} (${visiveis.length})`;
+    titulo.textContent = filtro === 'todas'
+      ? (palavras.length ? `Encontradas (${visiveis.length})` : `Minhas receitas (${data.length})`)
+      : `${aba.nome} (${visiveis.length})`;
+
     barraAbas.replaceChildren(...abas.map(a => el('button', {
       class: 'aba' + (a.id === filtro ? ' ativa' : ''), type: 'button', role: 'tab',
       'aria-selected': a.id === filtro ? 'true' : 'false',
@@ -342,13 +387,19 @@ async function telaLista() {
         onclick: () => { visao = 'grade'; gravarPreferencia('visao', visao); desenhar(); } }, '▦ Grade'),
       el('button', { class: 'botao pequeno' + (visao === 'lista' ? ' selecionado' : ''), type: 'button', 'aria-pressed': visao === 'lista' ? 'true' : 'false',
         onclick: () => { visao = 'lista'; gravarPreferencia('visao', visao); desenhar(); } }, '☰ Lista'));
-    area.replaceChildren(visao === 'lista'
-      ? el('div', { class: 'lista' }, visiveis.map(itemLista))
-      : el('div', { class: 'grade' }, visiveis.map(itemGrade)));
+    if (!visiveis.length) {
+      area.replaceChildren(el('p', { class: 'aviso', text: palavras.length
+        ? `Nenhuma receita com "${estado.busca.trim()}"${filtro !== 'todas' ? ' nesta categoria' : ''}.`
+        : 'Nenhuma receita nesta categoria.' }));
+    } else {
+      area.replaceChildren(visao === 'lista'
+        ? el('div', { class: 'lista' }, visiveis.map(itemLista))
+        : el('div', { class: 'grade' }, visiveis.map(itemGrade)));
+    }
     barraAbas.querySelector('.ativa')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
-  mostrar(cabecalho, barraAbas, botoesVisao, area);
+  mostrar(cabecalho, campoBusca, barraAbas, botoesVisao, area);
   desenhar();
 }
 
