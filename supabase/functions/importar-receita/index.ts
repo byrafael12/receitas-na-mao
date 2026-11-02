@@ -88,6 +88,21 @@ function inteiro(v: unknown, max: number): number | null {
   const n = numero(v, max);
   return n === null ? null : Math.round(n);
 }
+// deno-lint-ignore no-explicit-any
+function listaPassos(v: any): { grupo: string | null; texto: string }[] {
+  if (!Array.isArray(v)) return [];
+  const vistos = new Set<string>();
+  const saida: { grupo: string | null; texto: string }[] = [];
+  for (const item of v) {
+    const t = texto(typeof item === 'string' ? item : item?.texto, 2000);
+    if (!t || vistos.has(t.toLowerCase())) continue;
+    vistos.add(t.toLowerCase());
+    saida.push({ grupo: typeof item === 'string' ? null : texto(item?.grupo, 60), texto: t });
+    if (saida.length >= 60) break;
+  }
+  return saida;
+}
+
 function listaTextos(v: unknown, maxItens: number, maxLetras: number): string[] {
   if (!Array.isArray(v)) return [];
   const vistos = new Set<string>();
@@ -125,7 +140,7 @@ function limparReceita(r: any, categorias: string[], totalImagens: number) {
     tempo_total_min: inteiro(r?.tempo_total_min, 10000),
     ingredientes,
     utensilios: listaTextos(r?.utensilios, 30, 60),
-    passos: listaTextos(r?.passos, 60, 2000),
+    passos: listaPassos(r?.passos),
     observacoes: texto(r?.observacoes, 3000),
     autor: texto(r?.autor, 120),
     indice_imagem_capa: capa && capa >= 1 && capa <= totalImagens ? capa : null,
@@ -144,7 +159,7 @@ function instrucoes(categorias: string[]): string {
     '2. Nunca invente ingrediente, quantidade, tempo, porção ou passo. Se não estiver no conteúdo, deixe null e cite o campo em campos_duvidosos (ex.: "quantidade da farinha", "porções").',
     '3. Junte as fontes. A legenda e o texto na tela costumam trazer ingredientes e quantidades; o áudio e os quadros costumam mostrar o preparo. Se houver conflito, prefira o texto escrito e registre em campos_duvidosos.',
     '4. Ingredientes: separe quantidade (número; 1/2 vira 0.5; "1 e 1/2" vira 1.5), unidade (g, kg, ml, l, xícara (chá), colher (sopa), colher (chá), unidade, dente, gomo, pitada, lata, pacote) e nome. "A gosto" ou sem quantidade: quantidade null. Guarde a linha como apareceu em texto_original.',
-    '5. Quando a receita separa massa, recheio, cobertura, calda etc., preencha grupo em cada ingrediente.',
+    '5. Quando a receita separa massa, recheio, cobertura, calda etc., preencha grupo em cada ingrediente E em cada passo do preparo (mesmos nomes nos dois). Receita sem partes: grupo null.',
     '6. Passos: frases curtas e objetivas, na ordem, reescritas com suas palavras (não copie o texto do autor palavra por palavra), sem numeração no início.',
     '7. Utensílios: só os citados, mostrados ou claramente necessários (ex.: forma, batedeira, frigideira, liquidificador, forno).',
     '8. Observações: dicas, variações, conservação, rendimento.',
@@ -188,7 +203,7 @@ function formatoResposta(categorias: string[]) {
               }
             },
             utensilios: { type: 'ARRAY', items: S },
-            passos: { type: 'ARRAY', items: S },
+            passos: { type: 'ARRAY', items: { type: 'OBJECT', properties: { grupo: Sn, texto: S }, required: ['texto'] } },
             observacoes: Sn,
             autor: Sn,
             indice_imagem_capa: In,
@@ -230,7 +245,7 @@ function formatoJsonSchema(categorias: string[]) {
               }
             },
             utensilios: { type: 'array', items: S },
-            passos: { type: 'array', items: S },
+            passos: { type: 'array', items: { type: 'object', properties: { grupo: Sn, texto: S }, required: ['texto'] } },
             observacoes: Sn, autor: Sn, indice_imagem_capa: In,
             campos_duvidosos: { type: 'array', items: S }
           },
@@ -246,7 +261,7 @@ function formatoJsonSchema(categorias: string[]) {
 // Descrição do formato em texto, para quando a IA não aceitar o esquema.
 const FORMATO_EM_TEXTO = 'Formato da resposta (JSON): {"receitas":[{"titulo":"","categoria":null,"etiquetas":[],"porcoes":null,' +
   '"tempo_preparo_min":null,"tempo_total_min":null,"ingredientes":[{"grupo":null,"quantidade":null,"unidade":null,"nome":"",' +
-  '"observacao":null,"texto_original":null}],"utensilios":[],"passos":[],"observacoes":null,"autor":null,' +
+  '"observacao":null,"texto_original":null}],"utensilios":[],"passos":[{"grupo":null,"texto":""}],"observacoes":null,"autor":null,' +
   '"indice_imagem_capa":null,"campos_duvidosos":[]}],"aviso":null}';
 
 // deno-lint-ignore no-explicit-any

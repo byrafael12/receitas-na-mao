@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '9.1';
+const VERSAO = '9.2';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -448,8 +448,7 @@ async function telaReceita(id) {
     (r.utensilios || []).length ? el('h2', { text: 'Utensílios' }) : null,
     (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
     el('h2', { text: 'Modo de preparo' }),
-    r.passos.length ? el('ol', { class: 'passos' }, r.passos.map(p => el('li', { text: p.texto })))
-      : el('p', { class: 'aviso', text: 'Sem passos.' }),
+    r.passos.length ? passosAgrupados(r.passos) : el('p', { class: 'aviso', text: 'Sem passos.' }),
     r.observacoes ? el('h2', { text: 'Observações' }) : null,
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
@@ -569,8 +568,9 @@ async function telaFormulario(id, revisao = null) {
     return linha;
   }
   function linhaGrupo(nome = '') {
-    const linha = el('div', { class: 'linha-grupo', 'data-tipo': 'grupo' },
+    const linha = el('div', { class: 'linha-grupo com-mover', 'data-tipo': 'grupo' },
       el('input', { type: 'text', placeholder: 'Nome do grupo (ex.: Recheio)', maxlength: 60, 'aria-label': 'Grupo', value: nome }),
+      ...botoesMover(() => linha),
       el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover grupo', onclick: () => linha.remove() }, '×'));
     return linha;
   }
@@ -594,19 +594,31 @@ async function telaFormulario(id, revisao = null) {
 
   const observacoes = el('textarea', { maxlength: 3000, 'aria-label': 'Observações', placeholder: 'Dicas, variações, como guardar...' }, r?.observacoes || '');
 
-  // Passos numerados
+  // Passos numerados, com grupos opcionais (ex.: Massa, Recheio, Cobertura).
+  // A numeração segue corrida entre os grupos.
   const listaPassos = el('div');
   function renumerar() {
-    [...listaPassos.children].forEach((l, i) => { l.querySelector('.numero-passo').textContent = `${i + 1}.`; });
+    [...listaPassos.querySelectorAll('.numero-passo')].forEach((n, i) => { n.textContent = `${i + 1}.`; });
   }
   function linhaPasso(texto = '') {
-    const linha = el('div', { class: 'linha-passo' },
+    const linha = el('div', { class: 'linha-passo', 'data-tipo': 'passo' },
       el('span', { class: 'numero-passo' }),
       el('textarea', { maxlength: 2000, 'aria-label': 'Passo', placeholder: 'Descreva o passo' }, texto),
       el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover passo', onclick: () => { linha.remove(); renumerar(); } }, '×'));
     return linha;
   }
-  for (const p of r?.passos || []) listaPassos.append(linhaPasso(p.texto));
+  function linhaGrupoPasso(nome = '') {
+    const linha = el('div', { class: 'linha-grupo com-mover', 'data-tipo': 'grupo' },
+      el('input', { type: 'text', placeholder: 'Nome do grupo (ex.: Recheio)', maxlength: 60, 'aria-label': 'Grupo do preparo', value: nome }),
+      ...botoesMover(() => linha),
+      el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover grupo do preparo', onclick: () => linha.remove() }, '×'));
+    return linha;
+  }
+  let grupoPasso = null;
+  for (const p of r?.passos || []) {
+    if ((p.grupo || null) !== grupoPasso) { grupoPasso = p.grupo || null; if (grupoPasso) listaPassos.append(linhaGrupoPasso(grupoPasso)); }
+    listaPassos.append(linhaPasso(p.texto));
+  }
   if (!r?.passos?.length) listaPassos.append(linhaPasso(), linhaPasso());
   renumerar();
 
@@ -639,7 +651,14 @@ async function telaFormulario(id, revisao = null) {
       ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: campos[1].value.trim(), nome,
         texto_original: linha.dataset.original || null });
     }
-    const passos = [...listaPassos.querySelectorAll('textarea')].map(t => t.value.trim()).filter(Boolean);
+    const passos = [];
+    let grupoDoPasso = null;
+    for (const linha of listaPassos.children) {
+      if (linha.dataset.tipo === 'grupo') { grupoDoPasso = linha.querySelector('input').value.trim() || null; continue; }
+      const texto = linha.querySelector('textarea').value.trim();
+      if (texto) passos.push({ grupo: grupoDoPasso, texto });
+    }
+    if (passos.length > 60) erros.push('Máximo de 60 passos.');
     const utensilios = [...listaUtensilios.querySelectorAll('input')].map(i => i.value.trim()).filter(Boolean);
     if (utensilios.length > 30) erros.push('Máximo de 30 utensílios.');
     const listaEtiquetas = etiquetas.value.split(',').map(t => t.trim()).filter(Boolean).slice(0, 15);
@@ -722,7 +741,8 @@ async function telaFormulario(id, revisao = null) {
     el('h2', { text: 'Modo de preparo' }),
     listaPassos,
     el('div', { class: 'acoes' },
-      el('button', { class: 'botao pequeno', type: 'button', onclick: () => { listaPassos.append(linhaPasso()); renumerar(); } }, '+ Passo')),
+      el('button', { class: 'botao pequeno', type: 'button', onclick: () => { listaPassos.append(linhaPasso()); renumerar(); } }, '+ Passo'),
+      el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaPassos.append(linhaGrupoPasso()) }, '+ Grupo')),
     el('h2', { text: 'Observações' }),
     observacoes,
     el('h2', { text: 'Fonte' }),
@@ -779,6 +799,32 @@ function esperarEvento(alvo, evento, msTempo, mensagemErro) {
 }
 
 /** Lê a duração e tira quadros do vídeo (até 30, espalhados). */
+/** Passos em blocos por grupo (Massa, Recheio...), com numeração corrida. */
+function passosAgrupados(passos) {
+  const blocos = [];
+  for (const p of passos) {
+    const g = p.grupo || null;
+    if (!blocos.length || blocos.at(-1).grupo !== g) blocos.push({ grupo: g, itens: [] });
+    blocos.at(-1).itens.push(p.texto);
+  }
+  let numero = 1;
+  return el('div', {}, blocos.map(b => {
+    const lista = el('ol', { class: 'passos', start: numero }, b.itens.map(t => el('li', { text: t })));
+    numero += b.itens.length;
+    return el('div', {}, b.grupo ? el('div', { class: 'grupo-titulo', text: b.grupo }) : null, lista);
+  }));
+}
+
+/** Setas para subir ou descer uma linha (usadas nos grupos: os itens abaixo do grupo passam a ser dele). */
+function botoesMover(linha) {
+  return [
+    el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Subir grupo', title: 'Subir',
+      onclick: () => { const l = linha(); if (l.previousElementSibling) l.previousElementSibling.before(l); } }, '↑'),
+    el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Descer grupo', title: 'Descer',
+      onclick: () => { const l = linha(); if (l.nextElementSibling) l.nextElementSibling.after(l); } }, '↓')
+  ];
+}
+
 async function quadrosDoVideo(arquivo, aoProgredir) {
   const url = URL.createObjectURL(arquivo);
   const video = document.createElement('video');
@@ -997,6 +1043,17 @@ function telaImportar() {
   const resumo = el('p', { class: 'ajuda' });
   const status = el('div', { class: 'status', role: 'status' });
   const botao = el('button', { class: 'botao principal', type: 'button' }, 'Ler receita com IA');
+  const botaoCancelar = el('button', { class: 'botao perigo', type: 'button', hidden: true }, 'Cancelar');
+  let controle = null;      // interrompe o envio à IA
+  let cancelado = false;    // interrompe o preparo do vídeo e das imagens
+  const CANCELADO = 'Leitura cancelada. Nada foi salvo.';
+  const conferirCancelado = () => { if (cancelado) throw new Error(CANCELADO); };
+  botaoCancelar.addEventListener('click', () => {
+    cancelado = true;
+    controle?.abort();
+    botaoCancelar.disabled = true;
+    botaoCancelar.textContent = 'Cancelando…';
+  });
 
   const atualizarResumo = () => {
     const partes = [];
@@ -1022,6 +1079,9 @@ function telaImportar() {
     if (entradaImagens.files.length > MAX_PRINTS) { status.textContent = `Usando só as ${MAX_PRINTS} primeiras imagens.`; }
 
     botao.disabled = true;
+    cancelado = false;
+    controle = new AbortController();
+    botaoCancelar.hidden = false; botaoCancelar.disabled = false; botaoCancelar.textContent = 'Cancelar';
     const inicio = Date.now();
     const relogio = setInterval(() => { botao.textContent = `Lendo… ${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
     const avisos = [];
@@ -1029,6 +1089,7 @@ function telaImportar() {
       const corpo = { texto, link: linkFonte || undefined, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
       const candidatos = [];
       for (const [i, f] of imagens.entries()) {
+        conferirCancelado();
         status.textContent = `Preparando imagem ${i + 1} de ${imagens.length}…`;
         const b = await reduzirImagem(f, 1280, 0.8);
         corpo.imagens.push({ mime: 'image/jpeg', dados: await blobParaBase64(b) });
@@ -1036,12 +1097,13 @@ function telaImportar() {
       }
       if (video) {
         status.textContent = 'Abrindo o vídeo…';
-        const v = await quadrosDoVideo(video, t => { status.textContent = t; });
+        const v = await quadrosDoVideo(video, t => { conferirCancelado(); status.textContent = t; });
         corpo.intervalo_quadros_s = v.intervalo;
         for (const q of v.quadros) {
           corpo.quadros.push({ mime: 'image/jpeg', dados: await blobParaBase64(q) });
           candidatos.push({ blob: q, url: URL.createObjectURL(q) });
         }
+        conferirCancelado();
         status.textContent = 'Separando o áudio do vídeo…';
         // 1º: copia o áudio AAC direto do arquivo (funciona no iPhone).
         // 2º: se não der, decodifica e gera WAV (funciona no Chrome do Windows).
@@ -1059,15 +1121,18 @@ function telaImportar() {
           }
         }
       }
+      conferirCancelado();
       status.textContent = linkFonte ? 'Abrindo o link e lendo a receita com a IA…' : 'A IA está lendo a receita…';
       const { data } = await sb.auth.getSession();
       if (!data.session) throw new Error('Sua sessão expirou. Entre de novo.');
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/importar-receita`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${data.session.access_token}`, apikey: SUPABASE_CHAVE_PUBLICA },
-        body: JSON.stringify(corpo)
+        body: JSON.stringify(corpo),
+        signal: controle.signal
       });
       const json = await resp.json().catch(() => ({}));
+      conferirCancelado();
       if (!resp.ok) throw new Error(json.erro || `Erro ${resp.status} na importação.`);
       if (!json.receitas?.length) throw new Error(json.aviso || 'A IA não encontrou receita nesse conteúdo.');
 
@@ -1089,12 +1154,14 @@ function telaImportar() {
       };
       location.hash = '#/revisar';
     } catch (e) {
-      status.className = 'status erro';
-      status.textContent = erroAmigavel(e);
+      status.className = cancelado ? 'status' : 'status erro';
+      status.textContent = cancelado ? CANCELADO : erroAmigavel(e);
     } finally {
       clearInterval(relogio);
+      controle = null;
       botao.disabled = false;
       botao.textContent = 'Ler receita com IA';
+      botaoCancelar.hidden = true;
     }
   });
 
@@ -1108,7 +1175,7 @@ function telaImportar() {
     el('label', { class: 'campo' }, el('span', {}, 'Prints ou fotos ', el('small', { text: `até ${MAX_PRINTS}` })), entradaImagens),
     el('label', { class: 'campo' }, el('span', {}, 'Vídeo ', el('small', { text: 'até 5 minutos; o vídeo não é enviado, só imagens e áudio' })), entradaVideo),
     resumo,
-    el('div', { class: 'acoes' }, botao),
+    el('div', { class: 'acoes' }, botao, botaoCancelar),
     status
   ));
 }
@@ -1139,7 +1206,7 @@ async function telaRevisao() {
       titulo: rec.titulo, categoria_id: catId, etiquetas: rec.etiquetas, porcoes: rec.porcoes,
       tempo_preparo_min: rec.tempo_preparo_min, tempo_total_min: rec.tempo_total_min,
       ingredientes: rec.ingredientes.map(i => ({ ...i, nome: i.observacao ? `${i.nome} (${i.observacao})` : i.nome })),
-      passos: rec.passos.map(t => ({ texto: t })), utensilios: rec.utensilios, observacoes: rec.observacoes,
+      passos: rec.passos.map(p => typeof p === 'string' ? { grupo: null, texto: p } : { grupo: p.grupo || null, texto: p.texto }), utensilios: rec.utensilios, observacoes: rec.observacoes,
       fonte_url: imp.link, fonte_autor: rec.autor || imp.autorLink, fonte_tipo: imp.fonteTipo
     },
     candidatos: imp.candidatos, capaIndice: capa,

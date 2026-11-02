@@ -20,6 +20,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/05-ajuste-categorias.sql` | Carne de rês; Japonês e Chinês numa só categoria; nova ordem |
 | `supabase/06-importacao-ia.sql` | Tipo "combinado" nas importações e categoria Bebidas |
 | `supabase/07-bebidas-e-drinks.sql` | "Bebidas" passa a "Bebidas e Drinks" |
+| `supabase/08-grupos-no-preparo.sql` | Grupos (Massa, Recheio...) também no modo de preparo |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que lê o link (site, YouTube, TikTok, Instagram) e envia link, legenda, imagens e áudio ao Gemini, devolvendo a receita |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
 

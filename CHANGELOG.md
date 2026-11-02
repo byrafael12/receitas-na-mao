@@ -1,10 +1,19 @@
 # Histórico de versões
 
+## Versão 9.2 (02/11/2026), ajustes pedidos no teste da Entrega 3
+
+- **Grupos no modo de preparo**: botão **+ Grupo** também no preparo (ex.: Massa, Recheio, Cobertura), como já existia nos ingredientes. A numeração dos passos segue corrida entre os grupos (1, 2, 3...). Na tela da receita, cada grupo aparece com seu título.
+- **Setas ↑ ↓ nos grupos** (preparo e ingredientes): o grupo novo entra no fim e sobe até o ponto certo; os itens abaixo dele passam a ser do grupo. Assim dá para agrupar receitas já cadastradas sem redigitar.
+- A IA passa a devolver o grupo de cada passo (sites com preparo em seções, vídeos e legendas que separam massa e recheio).
+- **Botão Cancelar** na importação: interrompe o preparo do vídeo e das imagens ou a espera pela IA. Nada é salvo. Obs.: se o pedido já chegou ao Supabase, a função termina sozinha e conta no limite de 50 por dia.
+- Script `supabase/08-grupos-no-preparo.sql`: coluna `grupo` nos passos (até 60 letras) e `salvar_receita` aceitando passo com grupo (o formato antigo continua aceito).
+- Testes locais: banco 5 de 5, função 75 de 75, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 9.1 (02/11/2026): correção de arquivos do Controle Financeiro enviados por engano
 
 - Em 01/11/2026 o commit "Versão 36: receitas previstas" (do Controle Financeiro) foi enviado a este repositório: trocou o `index.html` e instalou o `sw.js` (service worker) do outro app, que passou a abrir no lugar do Receitas na mão.
 - `index.html` do Receitas na mão restaurado.
-- `sw.js` substituído por um "desligador": apaga só o que foi guardado para /receitas-na-mao/, se desliga e recarrega. Pode ser apagado em dezembro/2026.
+- `sw.js` substituído por um "desligador": apaga só o que foi guardado para /receitas-na-mao/, se desliga e recarrega. Pode ser apagado a partir de 09/11/2026 (iPhone e notebook já corrigidos em 02/11).
 - `app.js` desliga qualquer service worker no endereço /receitas-na-mao/ ao abrir (não mexe no do Controle Financeiro).
 - `05-contas-fixas-receitas.sql` e `Codigo.gs` da raiz apagados (eram do Controle Financeiro).
 

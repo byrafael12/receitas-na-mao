@@ -149,6 +149,7 @@ textarea { min-height: 72px; resize: vertical; }
 .linha-ingrediente { display: grid; grid-template-columns: 68px 78px minmax(0, 1fr) 40px; gap: 6px; margin-bottom: 8px; align-items: center; }
 .linha-grupo { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 6px; margin: 12px 0 8px; }
 .linha-grupo input { font-weight: 700; }
+.linha-grupo.com-mover { grid-template-columns: minmax(0, 1fr) 40px 40px 40px; }
 .linha-passo { display: grid; grid-template-columns: 28px minmax(0, 1fr) 40px; gap: 6px; margin-bottom: 8px; align-items: start; }
 .numero-passo { padding-top: 10px; font-weight: 700; color: var(--texto-suave); text-align: right; }
 .remover { min-height: 40px; width: 40px; padding: 0; border-radius: 10px; }
