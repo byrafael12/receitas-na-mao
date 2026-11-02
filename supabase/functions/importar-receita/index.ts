@@ -1,15 +1,19 @@
 // =====================================================================
-// Receitas na mão · Edge Function "importar-receita" (Entrega 2)
+// Receitas na mão · Edge Function "importar-receita" (Entregas 2 e 3)
 //
 // Recebe do app: legenda (texto), imagens (prints), quadros e áudio de
-// vídeo, em qualquer combinação. Envia ao Gemini e devolve uma ou mais
-// receitas no formato do app, para Rafael revisar antes de salvar.
+// vídeo e um link (site de receita, YouTube, Instagram ou TikTok), em
+// qualquer combinação. Envia ao Gemini e devolve uma ou mais receitas no
+// formato do app, para Rafael revisar antes de salvar.
 //
 // Segurança:
 //  - A chave do Gemini fica só no segredo GEMINI_API_KEY do Supabase.
 //  - Só aceita chamadas do endereço do app e de usuário logado (o
 //    Supabase confere o crachá/JWT antes; aqui conferimos de novo).
 //  - Limite de 50 importações por dia, para conter gasto.
+//  - Links: só http/https, portas padrão, sem endereço interno (rede
+//    local, nuvem), conferindo de novo a cada redirecionamento; página até
+//    2 MB, imagem até 3 MB, 10 s por download (proteção contra SSRF).
 //  - A resposta da IA é validada e cortada nos tamanhos do banco antes
 //    de voltar ao app (o app ainda exibe tudo como texto puro).
 // =====================================================================
@@ -30,6 +34,15 @@ const MAX_QUADROS = 30;             // quadros do vídeo
 const MAX_IMAGEM_B64 = 1_500_000;   // por imagem, em base64
 const MAX_AUDIO_B64 = 9_000_000;    // ~5 min de áudio mono 8 kHz
 const TIPOS_IMAGEM = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_LINK = 2000;              // letras do link
+const MAX_PAGINA = 2_000_000;       // bytes da página do site
+const MAX_IMAGEM_LINK = 3_000_000;  // bytes da imagem de capa do site
+const TEMPO_DOWNLOAD_MS = 10_000;
+const MAX_TEXTO_PAGINA = 40_000;    // letras do texto da página enviadas à IA
+const AGENTE = 'Mozilla/5.0 (compatible; ReceitasNaMao/1.0; +https://byrafael12.github.io/receitas-na-mao/)';
+// Só para os testes locais: manda os downloads de links para um servidor
+// simulado. Sem efeito no Supabase (a variável não existe lá).
+const LINK_TESTE = Deno.env.get('LINK_TESTE_URL') || '';
 
 // ---------------------------------------------------------------------
 // Respostas e CORS (quem pode chamar a função pelo navegador)
@@ -125,7 +138,7 @@ function limparReceita(r: any, categorias: string[], totalImagens: number) {
 // ---------------------------------------------------------------------
 function instrucoes(categorias: string[]): string {
   return [
-    'Você extrai receitas culinárias de conteúdo de redes sociais (legenda, prints, quadros e áudio de vídeo) para o app pessoal de receitas de um usuário brasileiro.',
+    'Você extrai receitas culinárias de conteúdo de redes sociais (legenda, prints, quadros e áudio de vídeo), de vídeos do YouTube e de páginas de sites de receita, para o app pessoal de receitas de um usuário brasileiro.',
     'Regras:',
     '1. Responda só com o JSON no formato pedido, em português do Brasil.',
     '2. Nunca invente ingrediente, quantidade, tempo, porção ou passo. Se não estiver no conteúdo, deixe null e cite o campo em campos_duvidosos (ex.: "quantidade da farinha", "porções").',
@@ -141,6 +154,7 @@ function instrucoes(categorias: string[]): string {
     '12. autor: o @ ou nome do autor, se aparecer no conteúdo.',
     '13. indice_imagem_capa: o número da IMAGEM que melhor mostra o prato pronto, ou null.',
     '14. Se não houver receita, devolva receitas como lista vazia e explique em aviso.',
+    '15. Vídeo do YouTube: use a fala, o texto na tela e as imagens; respeite as quantidades ditas ou mostradas. Página de site: os ingredientes e quantidades vêm do site; mantenha-os, só separe quantidade, unidade e nome. Conteúdo em outra língua: traduza para o português do Brasil e converta medidas americanas (cup, tbsp, tsp, oz, °F) citando a original em texto_original.',
     FORMATO_EM_TEXTO
   ].join('\n');
 }
@@ -241,6 +255,350 @@ function imagemValida(i: any): boolean {
 }
 
 // ---------------------------------------------------------------------
+// Links (Entrega 3)
+// ---------------------------------------------------------------------
+class ErroLink extends Error {}
+
+/** Endereço IP de rede interna, local, de nuvem ou reservado? */
+function ipInterno(ip: string): boolean {
+  const v6 = ip.replace(/^\[|\]$/g, '').toLowerCase();
+  if (v6.includes(':')) {
+    const v4 = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) return ipInterno(v4[1]);
+    return v6 === '::' || v6 === '::1' || /^(fc|fd|fe[89ab])/.test(v6) || v6.startsWith('64:ff9b') || v6.startsWith('2001:db8');
+  }
+  const p = ip.split('.').map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
+}
+
+/** Confere se o link pode ser baixado; devolve a URL normalizada. */
+async function conferirLink(endereco: string): Promise<URL> {
+  let u: URL;
+  try { u = new URL(endereco); } catch { throw new ErroLink('Link inválido. Copie o endereço completo, começando com https://'); }
+  if (!['http:', 'https:'].includes(u.protocol)) throw new ErroLink('Link inválido: use um endereço http ou https.');
+  if (u.username || u.password) throw new ErroLink('Link com usuário e senha não é aceito.');
+  if (u.port && !['80', '443'].includes(u.port)) throw new ErroLink('Link com porta diferente da padrão não é aceito.');
+  const host = u.hostname.toLowerCase();
+  const ehIp = /^[\d.]+$/.test(host) || host.startsWith('[');
+  if (ehIp ? ipInterno(host) : (!host.includes('.') || /(^|\.)(localhost|local|internal|intranet|home|lan|corp)$/.test(host))) {
+    throw new ErroLink('Esse endereço não é de um site público.');
+  }
+  if (!ehIp && !LINK_TESTE) {
+    // Confere também para onde o nome aponta (se o servidor permitir consultar o DNS).
+    for (const tipo of ['A', 'AAAA'] as const) {
+      try {
+        const ips = await Deno.resolveDns(host, tipo);
+        if (ips.some(ipInterno)) throw new ErroLink('Esse endereço não é de um site público.');
+      } catch (e) { if (e instanceof ErroLink) throw e; }
+    }
+  }
+  return u;
+}
+
+/** Baixa um endereço público com limite de tamanho e de tempo. */
+async function baixar(endereco: string, aceitos: RegExp, maxBytes: number): Promise<{ url: URL; tipo: string; bytes: Uint8Array }> {
+  let u = await conferirLink(endereco);
+  for (let saltos = 0; saltos <= 4; saltos++) {
+    const controle = new AbortController();
+    const tempo = setTimeout(() => controle.abort(), TEMPO_DOWNLOAD_MS);
+    try {
+      const destino = LINK_TESTE ? `${LINK_TESTE}/link?u=${encodeURIComponent(u.href)}` : u.href;
+      const r = await fetch(destino, {
+        redirect: 'manual', signal: controle.signal,
+        headers: { 'User-Agent': AGENTE, 'Accept': 'text/html,application/xhtml+xml,application/json,image/*;q=0.8,*/*;q=0.5', 'Accept-Language': 'pt-BR,pt;q=0.9' }
+      });
+      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+        await r.body?.cancel();
+        u = await conferirLink(new URL(r.headers.get('location')!, u).href);
+        continue;
+      }
+      if (!r.ok) { await r.body?.cancel(); throw new ErroLink(`O site respondeu ${r.status}${r.status === 403 || r.status === 429 ? ' (bloqueou o acesso automático)' : ''}.`); }
+      const tipo = (r.headers.get('content-type') || '').toLowerCase();
+      if (!aceitos.test(tipo)) { await r.body?.cancel(); throw new ErroLink(`O link não é uma página nem uma imagem (${tipo || 'tipo desconhecido'}).`); }
+      if (Number(r.headers.get('content-length') || 0) > maxBytes) { await r.body?.cancel(); throw new ErroLink('A página é grande demais.'); }
+      const leitor = r.body!.getReader();
+      const pedacos: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await leitor.read();
+        if (done) break;
+        total += value.length;
+        if (total > maxBytes) { await leitor.cancel(); throw new ErroLink('A página é grande demais.'); }
+        pedacos.push(value);
+      }
+      const bytes = new Uint8Array(total);
+      let pos = 0;
+      for (const p of pedacos) { bytes.set(p, pos); pos += p.length; }
+      return { url: u, tipo, bytes };
+    } catch (e) {
+      if (e instanceof ErroLink) throw e;
+      throw new ErroLink(e instanceof DOMException && e.name === 'AbortError' ? 'O site demorou demais para responder.' : 'Não consegui abrir o link (site fora do ar ou endereço errado).');
+    } finally {
+      clearTimeout(tempo);
+    }
+  }
+  throw new ErroLink('O link redireciona demais.');
+}
+
+function decodificarPagina(bytes: Uint8Array, tipo: string): string {
+  const inicio = new TextDecoder('latin1').decode(bytes.slice(0, 4096));
+  const charset = (tipo.match(/charset=([\w-]+)/i)?.[1] || inicio.match(/<meta[^>]+charset=["']?([\w-]+)/i)?.[1] || 'utf-8').toLowerCase();
+  try { return new TextDecoder(charset).decode(bytes); } catch { return new TextDecoder('utf-8').decode(bytes); }
+}
+
+function desfazerEntidades(t: string): string {
+  const nomes: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ordm: 'º', ordf: 'ª', deg: '°', frac12: '½', frac14: '¼', frac34: '¾' };
+  return t.replace(/&(#x[\da-f]+|#\d+|[a-z]+\d*);/gi, (m, c: string) => {
+    if (c[0] === '#') { const n = c[1].toLowerCase() === 'x' ? parseInt(c.slice(2), 16) : parseInt(c.slice(1), 10); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ''; }
+    return nomes[c.toLowerCase()] ?? m;
+  });
+}
+
+function textoDoHtml(html: string): string {
+  return desfazerEntidades(html
+    .replace(/<(br|\/p|\/li|\/h\d|\/div|\/tr)\b[^>]*>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '\n- ')
+    .replace(/<[^>]+>/g, ' '))
+    .replace(/[ \t\u00a0]+/g, ' ').replace(/\s*\n\s*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function metaDaPagina(html: string, nome: string): string | null {
+  const re = new RegExp(`<meta[^>]+(?:property|name)=["']${nome}["'][^>]*>`, 'i');
+  const tag = html.match(re)?.[0];
+  const v = tag?.match(/content=(?:"([^"]*)"|'([^']*)')/i);
+  return v ? desfazerEntidades(v[1] ?? v[2]).trim() || null : null;
+}
+
+/** Procura objetos schema.org "Recipe" nos blocos JSON-LD da página. */
+// deno-lint-ignore no-explicit-any
+function receitasJsonLd(html: string): any[] {
+  // deno-lint-ignore no-explicit-any
+  const achadas: any[] = [];
+  // deno-lint-ignore no-explicit-any
+  const visitar = (n: any, prof = 0) => {
+    if (!n || typeof n !== 'object' || prof > 8 || achadas.length >= 12) return;
+    if (Array.isArray(n)) { n.forEach(x => visitar(x, prof + 1)); return; }
+    const tipos = ([] as unknown[]).concat(n['@type'] ?? []).map(t => String(t).toLowerCase());
+    if (tipos.some(t => t === 'recipe' || t.endsWith('/recipe'))) { achadas.push(n); return; }
+    for (const chave of ['@graph', 'mainEntity', 'mainEntityOfPage', 'itemListElement', 'item', 'hasPart']) visitar(n[chave], prof + 1);
+  };
+  const re = /<script[^>]+type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi;
+  for (const m of html.matchAll(re)) {
+    const bruto = m[1].trim().replace(/^<!--|-->$/g, '').replace(/^\/\/<!\[CDATA\[|\/\/\]\]>$/g, '').trim();
+    try { visitar(JSON.parse(bruto)); } catch {
+      // alguns sites deixam quebras de linha cruas dentro das aspas
+      try { visitar(JSON.parse(bruto.replace(/[\r\n\t]+/g, ' '))); } catch { /* bloco ilegível: ignora */ }
+    }
+  }
+  return achadas;
+}
+
+/** "PT1H20M" vira 80 (minutos). */
+function minutosIso(v: unknown): number | null {
+  if (typeof v !== 'string') return null;
+  const m = v.trim().match(/^P(?:(\d+)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:\d+(?:\.\d+)?S)?)?$/i);
+  if (!m) return null;
+  const min = Number(m[1] || 0) * 1440 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+  return min > 0 ? Math.round(min) : null;
+}
+
+function textoSimples(v: unknown): string {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return textoDoHtml(String(v));
+  if (Array.isArray(v)) return v.map(textoSimples).filter(Boolean).join(', ');
+  // deno-lint-ignore no-explicit-any
+  const o = v as any;
+  return textoSimples(o.name ?? o.text ?? o['@value'] ?? '');
+}
+
+// deno-lint-ignore no-explicit-any
+function passosJsonLd(v: any, saida: string[] = [], prof = 0): string[] {
+  if (!v || prof > 5) return saida;
+  if (typeof v === 'string') { textoDoHtml(v).split(/\n+/).map(t => t.trim()).filter(Boolean).forEach(t => saida.push(t)); return saida; }
+  if (Array.isArray(v)) { v.forEach(x => passosJsonLd(x, saida, prof + 1)); return saida; }
+  const tipos = ([] as unknown[]).concat(v['@type'] ?? []).map(t => String(t).toLowerCase());
+  if (tipos.includes('howtosection') || v.itemListElement) {
+    if (v.name) saida.push(`[${textoSimples(v.name)}]`);
+    return passosJsonLd(v.itemListElement, saida, prof + 1);
+  }
+  const t = textoSimples(v.text ?? v.name ?? '');
+  if (t) saida.push(t);
+  return saida;
+}
+
+// deno-lint-ignore no-explicit-any
+function imagemJsonLd(v: any): string | null {
+  if (!v) return null;
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) { for (const x of v) { const u = imagemJsonLd(x); if (u) return u; } return null; }
+  return typeof v.url === 'string' ? v.url : (typeof v.contentUrl === 'string' ? v.contentUrl : null);
+}
+
+/** Receita estruturada do site em texto organizado para a IA. */
+// deno-lint-ignore no-explicit-any
+function receitaJsonLdEmTexto(r: any): string {
+  const linhas: string[] = [];
+  const add = (rotulo: string, v: unknown) => { const t = textoSimples(v); if (t) linhas.push(`${rotulo}: ${t.slice(0, 1500)}`); };
+  add('Nome', r.name);
+  add('Descrição', r.description);
+  add('Rendimento', Array.isArray(r.recipeYield) ? r.recipeYield.join(' / ') : r.recipeYield);
+  for (const [rotulo, campo] of [['Tempo de preparo', 'prepTime'], ['Tempo de cozimento', 'cookTime'], ['Tempo total', 'totalTime']]) {
+    const m = minutosIso(r[campo]);
+    if (m) linhas.push(`${rotulo}: ${m} min`);
+  }
+  add('Categoria no site', r.recipeCategory);
+  add('Cozinha', r.recipeCuisine);
+  add('Palavras-chave', r.keywords);
+  add('Utensílios', r.tool);
+  add('Autor', r.author);
+  const ingredientes = ([] as unknown[]).concat(r.recipeIngredient ?? r.ingredients ?? []).map(textoSimples).filter(Boolean).slice(0, 150);
+  if (ingredientes.length) linhas.push('Ingredientes:', ...ingredientes.map(i => `- ${i}`));
+  const passos = passosJsonLd(r.recipeInstructions).slice(0, 120);
+  if (passos.length) linhas.push('Modo de preparo:', ...passos.map((p, i) => p.startsWith('[') ? p : `${i + 1}. ${p}`));
+  return linhas.join('\n');
+}
+
+/** Texto principal da página, quando o site não tem dados estruturados. */
+function textoPrincipal(html: string): string {
+  let h = html.replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|noscript|svg|template|iframe|form|nav|header|footer|aside)\b[\s\S]*?<\/\1>/gi, ' ');
+  const artigo = h.match(/<article\b[\s\S]*<\/article>/i)?.[0] || h.match(/<main\b[\s\S]*<\/main>/i)?.[0];
+  if (artigo && artigo.length > 2000) h = artigo;
+  else h = h.match(/<body\b[\s\S]*<\/body>/i)?.[0] || h;
+  return textoDoHtml(h).slice(0, MAX_TEXTO_PAGINA);
+}
+
+function idYoutube(u: URL): string | null {
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  let id: string | null = null;
+  if (host === 'youtu.be') id = u.pathname.split('/')[1] || null;
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    id = u.searchParams.get('v') || u.pathname.match(/^\/(?:shorts|live|embed|v)\/([^/?#]+)/)?.[1] || null;
+  }
+  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
+function redeSocial(u: URL): 'instagram' | 'tiktok' | 'facebook' | null {
+  const host = u.hostname.toLowerCase();
+  if (/(^|\.)(instagram\.com|instagr\.am)$/.test(host)) return 'instagram';
+  if (/(^|\.)tiktok\.com$/.test(host)) return 'tiktok';
+  if (/(^|\.)(facebook\.com|fb\.watch)$/.test(host)) return 'facebook';
+  return null;
+}
+
+async function baixarJson(endereco: string) {
+  const { bytes } = await baixar(endereco, /json|javascript|text\/plain/, 200_000);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function imagemDoLink(endereco: string | null, base: URL): Promise<{ mime: string; dados: string } | null> {
+  if (!endereco) return null;
+  try {
+    const { tipo, bytes } = await baixar(new URL(endereco, base).href, /^image\/(jpeg|jpg|png|webp)/, MAX_IMAGEM_LINK);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { mime: tipo.includes('png') ? 'image/png' : tipo.includes('webp') ? 'image/webp' : 'image/jpeg', dados: btoa(bin) };
+  } catch (e) {
+    console.error('Capa do link não baixada:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+type ResultadoLink = {
+  tipo: 'site' | 'rede'; origem: string; url: string;
+  // deno-lint-ignore no-explicit-any
+  partes: any[]; autor: string | null; imagem: { mime: string; dados: string } | null; aviso: string | null;
+};
+
+/** Transforma o link em material para a IA (texto ou vídeo do YouTube). */
+async function lerLink(endereco: string): Promise<ResultadoLink> {
+  const u = await conferirLink(endereco);
+
+  const yt = idYoutube(u);
+  if (yt) {
+    const video = `https://www.youtube.com/watch?v=${yt}`;
+    let titulo: string | null = null, autor: string | null = null;
+    try {
+      const o = await baixarJson(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(video)}`);
+      titulo = texto(o?.title, 300); autor = texto(o?.author_name, 120);
+    } catch { /* vídeo privado ou fora do ar: o Gemini dirá */ }
+    return {
+      tipo: 'rede', origem: 'youtube', url: u.href, autor,
+      imagem: await imagemDoLink(`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`, u),
+      aviso: null,
+      partes: [
+        { text: `VÍDEO DO YOUTUBE${titulo ? ` "${titulo}"` : ''}${autor ? ` do canal ${autor}` : ''} (assista, ouça a fala e leia o texto na tela):` },
+        { fileData: { fileUri: video } }
+      ]
+    };
+  }
+
+  const rede = redeSocial(u);
+  if (rede === 'tiktok') {
+    // Caminho oficial e aberto do TikTok (oEmbed): traz a legenda e o autor, não o vídeo.
+    try {
+      const o = await baixarJson(`https://www.tiktok.com/oembed?url=${encodeURIComponent(u.href)}`);
+      const legenda = texto(o?.title, MAX_TEXTO);
+      if (legenda && legenda.length >= 40) {
+        return {
+          tipo: 'rede', origem: 'tiktok', url: u.href, autor: texto(o?.author_name, 120),
+          imagem: await imagemDoLink(typeof o?.thumbnail_url === 'string' ? o.thumbnail_url : null, u),
+          aviso: 'Do TikTok só dá para ler a legenda pelo link. Se faltar algo, salve o vídeo e envie junto.',
+          partes: [{ text: 'LEGENDA DO POST NO TIKTOK:\n' + legenda }]
+        };
+      }
+    } catch { /* segue para o aviso abaixo */ }
+    throw new ErroLink('O TikTok não liberou a legenda deste vídeo pelo link. Salve o vídeo e copie a legenda, e envie aqui.');
+  }
+
+  const { url, tipo, bytes } = await baixar(u.href, /text\/html|application\/xhtml/, MAX_PAGINA);
+  const html = decodificarPagina(bytes, tipo);
+
+  if (rede) {
+    // Instagram e Facebook: sem acesso oficial ao post. Tentamos só o resumo
+    // público da página (og:description), que às vezes traz a legenda.
+    const descricao = metaDaPagina(html, 'og:description') || metaDaPagina(html, 'description');
+    const legenda = descricao?.match(/:\s*["“](.+)["”]\s*\.?\s*$/s)?.[1] || descricao;
+    if (legenda && legenda.length >= 80 && !/log ?in|entrar|cadastre-se|sign up/i.test(legenda.slice(0, 60))) {
+      const autor = descricao?.match(/-\s*([\w.]+)\s+(?:on|em)\s/)?.[1];
+      return {
+        tipo: 'rede', origem: rede, url: url.href, autor: autor ? '@' + autor : null,
+        imagem: await imagemDoLink(metaDaPagina(html, 'og:image'), url),
+        aviso: `Do ${rede === 'instagram' ? 'Instagram' : 'Facebook'} só dá para ler a legenda pelo link, e às vezes ela vem cortada. Se faltar algo, envie o vídeo ou prints junto.`,
+        partes: [{ text: `LEGENDA DO POST (${rede}):\n` + legenda.slice(0, MAX_TEXTO) }]
+      };
+    }
+    throw new ErroLink(`O ${rede === 'instagram' ? 'Instagram' : 'Facebook'} não liberou o conteúdo deste post pelo link. Copie a legenda (… > Copiar) e salve o vídeo, e envie aqui.`);
+  }
+
+  // Site de receita: 1º dados estruturados (schema.org), 2º texto da página.
+  const estruturadas = receitasJsonLd(html);
+  const tituloPagina = metaDaPagina(html, 'og:title') || textoDoHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '');
+  const nomeSite = metaDaPagina(html, 'og:site_name') || url.hostname.replace(/^www\./, '');
+  if (estruturadas.length) {
+    return {
+      tipo: 'site', origem: 'jsonld', url: url.href,
+      autor: textoSimples(estruturadas[0].author) || nomeSite,
+      imagem: await imagemDoLink(imagemJsonLd(estruturadas[0].image) || metaDaPagina(html, 'og:image'), url),
+      aviso: null,
+      partes: [{ text: `RECEITA DO SITE ${nomeSite} (dados estruturados publicados pelo próprio site):\n` +
+        estruturadas.map(receitaJsonLdEmTexto).join('\n\n---\n\n').slice(0, MAX_TEXTO_PAGINA) }]
+    };
+  }
+  const corpoTexto = textoPrincipal(html);
+  if (corpoTexto.length < 200) throw new ErroLink('Não achei o texto da receita nessa página (o site pode exigir login ou montar a página só no navegador). Copie o texto e cole na legenda.');
+  return {
+    tipo: 'site', origem: 'texto', url: url.href, autor: nomeSite,
+    imagem: await imagemDoLink(metaDaPagina(html, 'og:image'), url),
+    aviso: 'O site não publica a receita em formato padrão; a IA leu o texto da página. Confira com atenção.',
+    partes: [{ text: `TEXTO DA PÁGINA ${tituloPagina ? `"${tituloPagina}" ` : ''}DO SITE ${nomeSite} (ignore menus, comentários e propaganda):\n` + corpoTexto }]
+  };
+}
+
+// ---------------------------------------------------------------------
 // Função principal
 // ---------------------------------------------------------------------
 Deno.serve(async (req) => {
@@ -281,18 +639,44 @@ Deno.serve(async (req) => {
     && corpo.audio.dados.length <= MAX_AUDIO_B64 ? corpo.audio : null;
   const intervaloQuadros = numero(corpo?.intervalo_quadros_s, 600);
   const categorias = listaTextos(corpo?.categorias, 40, 40);
+  const linkPedido = typeof corpo?.link === 'string' ? corpo.link.trim().slice(0, MAX_LINK) : '';
 
-  if (!textoColado && !imagens.length && !quadros.length && !audio) {
-    return resposta(400, { erro: 'Envie uma legenda, imagens ou um vídeo.' }, origem);
+  if (!textoColado && !imagens.length && !quadros.length && !audio && !linkPedido) {
+    return resposta(400, { erro: 'Envie um link, uma legenda, imagens ou um vídeo.' }, origem);
   }
 
+  const chave = Deno.env.get('GEMINI_API_KEY');
+  if (!chave) return resposta(500, { erro: 'Chave da IA não configurada no Supabase' }, origem);
+  const inicio = Date.now();
+
+  // Link: vira texto (site, legenda) ou vídeo do YouTube para a IA.
+  let link: ResultadoLink | null = null;
+  let erroLink: string | null = null;
+  if (linkPedido) {
+    try { link = await lerLink(linkPedido); } catch (e) {
+      erroLink = e instanceof ErroLink ? e.message : 'Não consegui ler o link.';
+      if (!(e instanceof ErroLink)) console.error('Erro ao ler link:', e);
+    }
+  }
+  const soLink = !textoColado && !imagens.length && !quadros.length && !audio;
+
   const temVideo = quadros.length > 0 || !!audio;
-  const entradas = [textoColado && 'legenda', imagens.length && 'print', temVideo && 'video'].filter(Boolean) as string[];
-  const tipoEntrada = entradas.length > 1 ? 'combinado' : entradas[0];
+  const entradas = [link && link.tipo, (linkPedido && !link) && 'link-falhou', textoColado && 'legenda', imagens.length && 'print', temVideo && 'video'].filter(Boolean) as string[];
+  const tiposValidos = entradas.filter(e => e !== 'link-falhou');
+  const tipoEntrada = tiposValidos.length > 1 ? 'combinado' : (tiposValidos[0] || (linkPedido.match(/instagram|tiktok|youtu|facebook|fb\.watch/i) ? 'rede' : 'site'));
+  const respostaLink = link ? { tipo: link.tipo, origem: link.origem, url: link.url, autor: link.autor, imagem: link.imagem } : null;
+
+  if (soLink && !link) {
+    await sb.from('importacoes').insert({
+      tipo_entrada: tipoEntrada, entradas: entradas.join('+'), duracao_ms: Date.now() - inicio, modelo_ia: null,
+      sucesso: false, erro: (erroLink || '').slice(0, 1000), receitas_encontradas: 0
+    });
+    return resposta(422, { erro: erroLink }, origem);
+  }
 
   // Partes do pedido, numerando as imagens (prints primeiro, depois quadros)
   // deno-lint-ignore no-explicit-any
-  const partes: any[] = [];
+  const partes: any[] = [...(link?.partes || [])];
   if (textoColado) partes.push({ text: 'LEGENDA OU TEXTO DA RECEITA:\n' + textoColado });
   let numeroImagem = 0;
   for (const img of imagens) {
@@ -313,14 +697,10 @@ Deno.serve(async (req) => {
     partes.push({ inlineData: { mimeType: audio.mime, data: audio.dados } });
   }
 
-  const chave = Deno.env.get('GEMINI_API_KEY');
-  if (!chave) return resposta(500, { erro: 'Chave da IA não configurada no Supabase' }, origem);
-
-  const inicio = Date.now();
   let tokensEntrada: number | null = null, tokensSaida: number | null = null;
   // deno-lint-ignore no-explicit-any
   let receitas: any[] = [];
-  let aviso: string | null = null;
+  let aviso: string | null = [erroLink && `Link não lido: ${erroLink} A receita foi lida do resto do material.`, link?.aviso].filter(Boolean).join(' ') || null;
   let erro: string | null = null;
 
   // Tentativas em ordem. Se a IA recusar o pedido (erro 400), passa para a
@@ -388,8 +768,12 @@ Deno.serve(async (req) => {
       console.error(`Gemini recusou (${t.nome}): ${detalhe}`);
       recusas.push(`${t.nome}: ${detalhe}`);
     }
-    if (!tentativaUsada) throw new Error('IA recusou o pedido em todas as tentativas. ' + recusas.join(' | ').slice(0, 600));
-    if (tentativaUsada === 'json-livre-sem-audio') aviso = 'A IA não aceitou o áudio deste vídeo; a receita foi lida só das imagens e da legenda.';
+    if (!tentativaUsada) {
+      throw new Error((link?.origem === 'youtube'
+        ? 'A IA não conseguiu abrir este vídeo do YouTube (vídeo privado, não listado, com restrição de idade ou longo demais). Detalhe: '
+        : 'IA recusou o pedido em todas as tentativas. ') + recusas.join(' | ').slice(0, 600));
+    }
+    if (tentativaUsada === 'json-livre-sem-audio') aviso = [aviso, 'A IA não aceitou o áudio deste vídeo; a receita foi lida só das imagens e da legenda.'].filter(Boolean).join(' ');
     if (!r!.ok) throw new Error(`IA respondeu ${r!.status}: ${(await r!.text()).slice(0, 200)}`);
     const json = await r!.json();
     tokensEntrada = json?.usageMetadata?.promptTokenCount ?? null;
@@ -422,5 +806,5 @@ Deno.serve(async (req) => {
   }).select('id').maybeSingle();
 
   if (erro) return resposta(502, { erro, importacao_id: registro?.id ?? null }, origem);
-  return resposta(200, { receitas, aviso, importacao_id: registro?.id ?? null, tipo_entrada: tipoEntrada }, origem);
+  return resposta(200, { receitas, aviso, importacao_id: registro?.id ?? null, tipo_entrada: tipoEntrada, link: respostaLink }, origem);
 });

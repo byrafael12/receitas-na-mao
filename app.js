@@ -20,7 +20,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '8';
+const VERSAO = '9';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -979,24 +979,34 @@ async function audioAacDoVideo(arquivo) {
   throw new Error('O vídeo não tem trilha de áudio');
 }
 
+/** Base64 (vindo da função) para arquivo de imagem no aparelho. */
+function base64ParaBlob(dados, mime) {
+  const bin = atob(dados);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 function telaImportar() {
   const legenda = el('textarea', { maxlength: 20000, 'aria-label': 'Legenda ou texto da receita',
     placeholder: 'Cole aqui a legenda do post ou o texto da receita (opcional)' });
   const entradaImagens = el('input', { type: 'file', accept: 'image/*', multiple: true, 'aria-label': 'Prints ou fotos' });
   const entradaVideo = el('input', { type: 'file', accept: 'video/*', 'aria-label': 'Vídeo' });
-  const link = el('input', { type: 'url', maxlength: 2000, placeholder: 'https:// (opcional, fica como fonte)', 'aria-label': 'Link do post' });
+  const link = el('input', { type: 'url', maxlength: 2000, inputmode: 'url', autocomplete: 'off',
+    placeholder: 'https:// site de receita, YouTube, Instagram ou TikTok', 'aria-label': 'Link da receita' });
   const resumo = el('p', { class: 'ajuda' });
   const status = el('div', { class: 'status', role: 'status' });
   const botao = el('button', { class: 'botao principal', type: 'button' }, 'Ler receita com IA');
 
   const atualizarResumo = () => {
     const partes = [];
+    if (link.value.trim()) partes.push('link');
     if (legenda.value.trim()) partes.push('legenda');
     if (entradaImagens.files.length) partes.push(`${entradaImagens.files.length} imagem(ns)`);
     if (entradaVideo.files.length) partes.push('1 vídeo');
-    resumo.textContent = partes.length ? 'Vai enviar: ' + partes.join(' + ') + '.' : 'Use uma ou mais opções. Vídeo + legenda costuma dar o melhor resultado.';
+    resumo.textContent = partes.length ? 'Vai enviar: ' + partes.join(' + ') + '.' : 'Use uma ou mais opções. Site ou YouTube: só o link basta. Instagram: vídeo + legenda dá o melhor resultado.';
   };
-  [legenda, entradaImagens, entradaVideo].forEach(e => e.addEventListener('input', atualizarResumo));
+  [link, legenda, entradaImagens, entradaVideo].forEach(e => e.addEventListener('input', atualizarResumo));
   entradaImagens.addEventListener('change', atualizarResumo);
   entradaVideo.addEventListener('change', atualizarResumo);
   atualizarResumo();
@@ -1007,8 +1017,8 @@ function telaImportar() {
     const imagens = [...entradaImagens.files].slice(0, MAX_PRINTS);
     const video = entradaVideo.files[0] || null;
     const linkFonte = link.value.trim();
-    if (!texto && !imagens.length && !video) { status.className = 'status erro'; status.textContent = 'Cole a legenda ou escolha imagens ou um vídeo.'; return; }
-    if (linkFonte && !linkSeguro(linkFonte)) { status.className = 'status erro'; status.textContent = 'Link: use um endereço começando com https://'; return; }
+    if (!texto && !imagens.length && !video && !linkFonte) { status.className = 'status erro'; status.textContent = 'Cole um link ou a legenda, ou escolha imagens ou um vídeo.'; return; }
+    if (linkFonte && !linkSeguro(linkFonte)) { status.className = 'status erro'; status.textContent = 'Link: copie o endereço completo, começando com https://'; return; }
     if (entradaImagens.files.length > MAX_PRINTS) { status.textContent = `Usando só as ${MAX_PRINTS} primeiras imagens.`; }
 
     botao.disabled = true;
@@ -1016,7 +1026,7 @@ function telaImportar() {
     const relogio = setInterval(() => { botao.textContent = `Lendo… ${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
     const avisos = [];
     try {
-      const corpo = { texto, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
+      const corpo = { texto, link: linkFonte || undefined, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
       const candidatos = [];
       for (const [i, f] of imagens.entries()) {
         status.textContent = `Preparando imagem ${i + 1} de ${imagens.length}…`;
@@ -1049,7 +1059,7 @@ function telaImportar() {
           }
         }
       }
-      status.textContent = 'A IA está lendo a receita…';
+      status.textContent = linkFonte ? 'Abrindo o link e lendo a receita com a IA…' : 'A IA está lendo a receita…';
       const { data } = await sb.auth.getSession();
       if (!data.session) throw new Error('Sua sessão expirou. Entre de novo.');
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/importar-receita`, {
@@ -1061,9 +1071,19 @@ function telaImportar() {
       if (!resp.ok) throw new Error(json.erro || `Erro ${resp.status} na importação.`);
       if (!json.receitas?.length) throw new Error(json.aviso || 'A IA não encontrou receita nesse conteúdo.');
 
+      // Foto do site ou miniatura do vídeo: entra por último entre as opções de capa.
+      const imagemLink = json.link?.imagem;
+      if (imagemLink && /^image\/(jpeg|png|webp)$/.test(imagemLink.mime) && typeof imagemLink.dados === 'string') {
+        try {
+          const b = base64ParaBlob(imagemLink.dados, imagemLink.mime);
+          candidatos.push({ blob: b, url: URL.createObjectURL(b), doLink: true });
+        } catch { /* sem a foto do link */ }
+      }
+
       estado.importacao = {
-        receitas: json.receitas, candidatos, link: linkFonte || null, importacaoId: json.importacao_id,
-        fonteTipo: video ? 'video' : (imagens.length ? 'print' : 'legenda'),
+        receitas: json.receitas, candidatos, link: linkSeguro(json.link?.url || linkFonte) || null, importacaoId: json.importacao_id,
+        fonteTipo: json.link ? json.link.tipo : (video ? 'video' : (imagens.length ? 'print' : 'legenda')),
+        autorLink: json.link?.autor || null,
         aviso: [json.aviso, ...avisos].filter(Boolean).join(' '),
         prints: imagens.length, indice: 0, ultimaSalva: null
       };
@@ -1081,12 +1101,12 @@ function telaImportar() {
   mostrar(el('section', {},
     el('p', {}, el('a', { href: '#/' }, '← Voltar')),
     el('h1', { text: 'Nova receita' }),
-    el('p', { class: 'ajuda' }, 'A IA lê a legenda, os prints e o vídeo e monta a receita para você revisar. ',
+    el('p', { class: 'ajuda' }, 'A IA lê o link, a legenda, os prints e o vídeo e monta a receita para você revisar. ',
       el('a', { href: '#/manual' }, 'Prefere digitar? Cadastro manual')),
+    el('label', { class: 'campo' }, el('span', {}, 'Link ', el('small', { text: 'site de receita e YouTube funcionam sozinhos; Instagram e TikTok, nem sempre' })), link),
     el('label', { class: 'campo' }, el('span', { text: 'Legenda ou texto' }), legenda),
     el('label', { class: 'campo' }, el('span', {}, 'Prints ou fotos ', el('small', { text: `até ${MAX_PRINTS}` })), entradaImagens),
     el('label', { class: 'campo' }, el('span', {}, 'Vídeo ', el('small', { text: 'até 5 minutos; o vídeo não é enviado, só imagens e áudio' })), entradaVideo),
-    el('label', { class: 'campo' }, el('span', { text: 'Link do post' }), link),
     resumo,
     el('div', { class: 'acoes' }, botao),
     status
@@ -1103,6 +1123,8 @@ async function telaRevisao() {
   // uma imagem por receita, a imagem de mesma posição.
   let capa = Number.isInteger(rec.indice_imagem_capa) ? rec.indice_imagem_capa - 1 : null;
   if (capa === null && imp.receitas.length > 1 && imp.prints >= imp.receitas.length) capa = imp.indice;
+  // Sem sugestão da IA: usa a foto do site ou a miniatura do vídeo, se houver.
+  if (capa === null) { const i = imp.candidatos.findIndex(c => c.doLink); if (i >= 0) capa = i; }
   const proxima = () => {
     imp.indice++;
     if (imp.indice < imp.receitas.length) telaRevisao();
@@ -1118,7 +1140,7 @@ async function telaRevisao() {
       tempo_preparo_min: rec.tempo_preparo_min, tempo_total_min: rec.tempo_total_min,
       ingredientes: rec.ingredientes.map(i => ({ ...i, nome: i.observacao ? `${i.nome} (${i.observacao})` : i.nome })),
       passos: rec.passos.map(t => ({ texto: t })), utensilios: rec.utensilios, observacoes: rec.observacoes,
-      fonte_url: imp.link, fonte_autor: rec.autor, fonte_tipo: imp.fonteTipo
+      fonte_url: imp.link, fonte_autor: rec.autor || imp.autorLink, fonte_tipo: imp.fonteTipo
     },
     candidatos: imp.candidatos, capaIndice: capa,
     aviso: imp.indice === 0 ? imp.aviso : null, duvidosos: rec.campos_duvidosos,
