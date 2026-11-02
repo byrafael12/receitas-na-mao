@@ -9,7 +9,8 @@
 // Segurança:
 //  - A chave do Gemini fica só no segredo GEMINI_API_KEY do Supabase.
 //  - Só aceita chamadas do endereço do app e de usuário logado (o
-//    Supabase confere o crachá/JWT antes; aqui conferimos de novo).
+//    Supabase confere o crachá/JWT antes; aqui conferimos de novo) e
+//    titular (contas de leitura, script 09, são recusadas).
 //  - Limite de 50 importações por dia, para conter gasto.
 //  - Links: só http/https, portas padrão, sem endereço interno (rede
 //    local, nuvem), conferindo de novo a cada redirecionamento; página até
@@ -635,6 +636,11 @@ Deno.serve(async (req) => {
   });
   const { data: dadosUsuario, error: erroUsuario } = await sb.auth.getUser(jwt);
   if (erroUsuario || !dadosUsuario?.user) return resposta(401, { erro: 'Sessão inválida. Entre de novo.' }, origem);
+
+  // Só o titular importa (amigos e família têm conta só de leitura).
+  // Se o script 09 ainda não rodou, a função eh_titular não existe e segue como antes.
+  const { data: titular, error: erroTitular } = await sb.rpc('eh_titular');
+  if (!erroTitular && titular === false) return resposta(403, { erro: 'Conta só de leitura: importar receitas é só para o dono do app.' }, origem);
 
   // Limite diário
   const inicioDoDia = new Date();

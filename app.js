@@ -1,7 +1,9 @@
 /* =====================================================================
    Receitas na mão · app.js
-   Versão 5 (Entrega 2): login Google, cadastro manual de receita com
-   foto, utensílios e observações, lista, detalhe, edição e exclusão.
+   Login Google, cadastro manual e importação com IA (legenda, prints,
+   vídeo e link), lista com busca, receita, edição e exclusão.
+   Versão 10: cópia das receitas e fotos no aparelho (IndexedDB) e
+   service worker, para ler sem internet.
 
    REGRA DE SEGURANÇA (XSS): todo texto de receita é colocado na tela
    com textContent (via a função el), NUNCA com innerHTML. Assim, se um
@@ -20,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '9.2';
+const VERSAO = '11';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -43,7 +45,12 @@ const estado = {
   etiquetas: [],
   urlsAssinadas: new Map(), // caminho da imagem -> { url, expira }
   importacao: null,         // receitas lidas pela IA aguardando revisão
-  busca: ''                 // texto da busca da tela inicial (mantido ao voltar)
+  busca: '',                // texto da busca da tela inicial (mantido ao voltar)
+  colecao: null,            // cópia de todas as receitas (também guardada no aparelho)
+  semConexao: false,        // true = mostrando a cópia, sem falar com o Supabase
+  semSessao: false,         // true = sessão vencida; mostra a cópia e pede login
+  titular: true,            // false = conta só de leitura (amigos e família, script 09)
+  urlsLocais: new Map()     // caminho da imagem -> endereço blob: da foto guardada
 };
 
 const app = document.getElementById('app');
@@ -184,6 +191,17 @@ async function comprimirImagem(arquivo) {
 
 /** Gera links temporários (1 hora) para imagens da pasta privada. */
 async function urlsDasImagens(caminhos) {
+  // 1º: fotos guardadas no aparelho (funcionam sem internet e não gastam tráfego)
+  const mapaLocal = {};
+  for (const c of new Set(caminhos.filter(Boolean))) {
+    if (!estado.urlsLocais.has(c)) {
+      const blob = await lerLocal('capas', c);
+      if (blob) estado.urlsLocais.set(c, URL.createObjectURL(blob));
+    }
+    if (estado.urlsLocais.has(c)) mapaLocal[c] = estado.urlsLocais.get(c);
+  }
+  caminhos = caminhos.filter(c => c && !mapaLocal[c]);
+  if (!caminhos.length || estado.semConexao) return mapaLocal;
   const agora = Date.now();
   const faltam = [...new Set(caminhos.filter(Boolean))]
     .filter(c => !(estado.urlsAssinadas.get(c)?.expira > agora + 60000));
@@ -195,7 +213,7 @@ async function urlsDasImagens(caminhos) {
       }
     }
   }
-  const mapa = {};
+  const mapa = { ...mapaLocal };
   for (const c of caminhos) if (c && estado.urlsAssinadas.has(c)) mapa[c] = estado.urlsAssinadas.get(c).url;
   return mapa;
 }
@@ -206,25 +224,158 @@ function elementoCapa(url, texto) {
 }
 
 // ---------------------------------------------------------------------
+// Cópia no aparelho (versão 10): IndexedDB, o banco do próprio navegador.
+// "dados" guarda a coleção inteira (receitas, ingredientes, passos,
+// categorias, etiquetas); "capas" guarda as fotos. Se o navegador não
+// permitir, o app segue funcionando só com internet.
+// ---------------------------------------------------------------------
+let bancoLocal = null;
+function abrirBancoLocal() {
+  if (!bancoLocal) {
+    bancoLocal = new Promise((ok, falha) => {
+      if (!('indexedDB' in window)) return falha(new Error('Sem IndexedDB'));
+      const pedido = indexedDB.open('receitas-na-mao', 1);
+      pedido.onupgradeneeded = () => {
+        pedido.result.createObjectStore('dados');
+        pedido.result.createObjectStore('capas');
+      };
+      pedido.onsuccess = () => ok(pedido.result);
+      pedido.onerror = () => falha(pedido.error);
+    }).catch(e => { bancoLocal = null; throw e; });
+  }
+  return bancoLocal;
+}
+async function operacaoLocal(loja, modo, acao) {
+  try {
+    const db = await abrirBancoLocal();
+    return await new Promise((ok, falha) => {
+      const t = db.transaction(loja, modo);
+      const pedido = acao(t.objectStore(loja));
+      t.oncomplete = () => ok(pedido?.result);
+      t.onerror = () => falha(t.error);
+      t.onabort = () => falha(t.error);
+    });
+  } catch {
+    return undefined; // sem cópia local: o app continua só com internet
+  }
+}
+const lerLocal = (loja, chave) => operacaoLocal(loja, 'readonly', l => l.get(chave));
+const gravarLocal = (loja, chave, valor) => operacaoLocal(loja, 'readwrite', l => l.put(valor, chave));
+const apagarLocal = (loja, chave) => operacaoLocal(loja, 'readwrite', l => l.delete(chave));
+const chavesLocal = async (loja) => (await operacaoLocal(loja, 'readonly', l => l.getAllKeys())) || [];
+async function limparCopiaLocal() {
+  await operacaoLocal('dados', 'readwrite', l => l.clear());
+  await operacaoLocal('capas', 'readwrite', l => l.clear());
+  for (const u of estado.urlsLocais.values()) URL.revokeObjectURL(u);
+  estado.urlsLocais.clear();
+  estado.colecao = null;
+}
+
+/** Lê todas as linhas de uma tabela em blocos de 1.000 (o Supabase devolve no máximo 1.000 por consulta). */
+async function lerTabelaInteira(tabela, campos, ordens = ['id']) {
+  const BLOCO = 1000, todas = [];
+  for (let de = 0; ; de += BLOCO) {
+    let consulta = sb.from(tabela).select(campos);
+    for (const o of ordens) consulta = consulta.order(o);
+    const { data, error } = await consulta.range(de, de + BLOCO - 1);
+    if (error) throw error;
+    todas.push(...data);
+    if (data.length < BLOCO) return todas;
+  }
+}
+
+/** Usa a coleção (categorias e etiquetas) nas telas. */
+function aplicarColecao(c) {
+  estado.colecao = c;
+  estado.categorias = ordenarCategorias(c.categorias);
+  estado.etiquetas = c.etiquetas;
+}
+
+/** Baixa tudo do Supabase, guarda no aparelho e depois baixa as fotos que faltam. */
+async function atualizarColecao() {
+  const [receitas, ingredientes, passos, categorias, etiquetas, receitaEtiquetas] = await Promise.all([
+    lerTabelaInteira('receitas', '*'),
+    lerTabelaInteira('ingredientes', '*'),
+    lerTabelaInteira('passos', '*'),
+    lerTabelaInteira('categorias', 'id, nome, ordem, ativa'),
+    lerTabelaInteira('etiquetas', 'id, nome'),
+    lerTabelaInteira('receita_etiquetas', 'receita_id, etiqueta_id', ['receita_id', 'etiqueta_id'])
+  ]);
+  receitas.sort((a, b) => String(b.atualizada_em || '').localeCompare(String(a.atualizada_em || '')));
+  const porOrdem = (a, b) => String(a.receita_id).localeCompare(String(b.receita_id)) || a.ordem - b.ordem;
+  const colecao = {
+    usuario_id: estado.usuario.id, email: estado.usuario.email || '', salva_em: new Date().toISOString(), titular: estado.titular,
+    receitas, ingredientes: ingredientes.sort(porOrdem), passos: passos.sort(porOrdem),
+    categorias, etiquetas, receita_etiquetas: receitaEtiquetas
+  };
+  aplicarColecao(colecao);
+  estado.semConexao = false;
+  await gravarLocal('dados', 'colecao', colecao);
+  baixarCapas(colecao); // em segundo plano
+  return colecao;
+}
+
+let baixandoCapas = null;
+/** Guarda no aparelho as fotos que ainda não estão lá e apaga as que não são mais usadas. */
+function baixarCapas(colecao) {
+  if (baixandoCapas) return baixandoCapas;
+  baixandoCapas = (async () => {
+    const usadas = new Set(colecao.receitas.map(r => r.imagem_caminho).filter(Boolean));
+    const guardadas = new Set(await chavesLocal('capas'));
+    for (const c of guardadas) {
+      if (!usadas.has(c)) {
+        await apagarLocal('capas', c);
+        if (estado.urlsLocais.has(c)) { URL.revokeObjectURL(estado.urlsLocais.get(c)); estado.urlsLocais.delete(c); }
+      }
+    }
+    const faltam = [...usadas].filter(c => !guardadas.has(c));
+    for (let i = 0; i < faltam.length; i += 4) {
+      await Promise.all(faltam.slice(i, i + 4).map(async (c) => {
+        try {
+          const { data, error } = await sb.storage.from(PASTA_IMAGENS).download(c);
+          if (!error && data) await gravarLocal('capas', c, data);
+        } catch { /* tenta de novo na próxima abertura */ }
+      }));
+    }
+  })().finally(() => { baixandoCapas = null; });
+  return baixandoCapas;
+}
+
+/** Espera uma tarefa por no máximo "ms" milissegundos. */
+function comLimite(promessa, ms) {
+  return Promise.race([promessa, new Promise((_, falha) => setTimeout(() => falha(new Error('Sem conexão com a internet.')), ms))]);
+}
+
+function dataHoraCurta(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+// ---------------------------------------------------------------------
 // Dados
 // ---------------------------------------------------------------------
+
+/** Ordem alfabética (sem ligar para acentos), com Outras sempre por último. */
+function ordenarCategorias(lista) {
+  return lista.slice().sort((a, b) =>
+    (a.nome === 'Outras') - (b.nome === 'Outras') || a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
+}
 
 async function carregarCategorias() {
   let { data, error } = await sb.from('categorias').select('id, nome, ordem, ativa').order('ordem');
   if (error) throw error;
-  if (!data.length) {
+  if (!data.length && estado.titular) {
     // Primeiro acesso: cria a lista inicial de categorias.
     const linhas = CATEGORIAS_INICIAIS.map((nome, i) => ({ nome, ordem: i + 1 }));
     const r = await sb.from('categorias').insert(linhas).select('id, nome, ordem, ativa').order('ordem');
     if (r.error) throw r.error;
     data = r.data;
   }
-  // Ordem alfabética (sem ligar para acentos), com Outras sempre por último.
-  estado.categorias = data.slice().sort((a, b) =>
-    (a.nome === 'Outras') - (b.nome === 'Outras') || a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
+  estado.categorias = ordenarCategorias(data);
 }
 
 async function carregarEtiquetas() {
+  if (estado.colecao) { estado.etiquetas = estado.colecao.etiquetas; return; }
   const { data, error } = await sb.from('etiquetas').select('id, nome').order('nome');
   if (error) throw error;
   estado.etiquetas = data;
@@ -235,6 +386,20 @@ function nomeCategoria(id) {
 }
 
 async function buscarReceitaCompleta(id) {
+  if (estado.colecao) {
+    let c = estado.colecao;
+    let r = c.receitas.find(x => x.id === id);
+    // Receita nova de outro aparelho: atualiza a cópia uma vez antes de desistir.
+    if (!r && !estado.semConexao) { try { c = await atualizarColecao(); r = c.receitas.find(x => x.id === id); } catch { /* segue */ } }
+    if (!r) return null;
+    const nomeEtiqueta = new Map(c.etiquetas.map(e => [e.id, e.nome]));
+    return {
+      ...r,
+      ingredientes: c.ingredientes.filter(i => i.receita_id === id).sort((a, b) => a.ordem - b.ordem),
+      passos: c.passos.filter(p => p.receita_id === id).sort((a, b) => a.ordem - b.ordem),
+      etiquetas: c.receita_etiquetas.filter(x => x.receita_id === id).map(x => nomeEtiqueta.get(x.etiqueta_id)).filter(Boolean)
+    };
+  }
   const [r, ing, pas, ret] = await Promise.all([
     sb.from('receitas').select('*').eq('id', id).maybeSingle(),
     sb.from('ingredientes').select('*').eq('receita_id', id).order('ordem'),
@@ -281,17 +446,6 @@ function gravarPreferencia(chave, valor) {
   try { localStorage.setItem('receitas.' + chave, valor); } catch { /* sem armazenamento */ }
 }
 
-/** Lê todas as linhas de uma tabela em blocos de 1.000 (o Supabase devolve no máximo 1.000 por consulta). */
-async function lerTudo(tabela, campos) {
-  const BLOCO = 1000, todas = [];
-  for (let de = 0; ; de += BLOCO) {
-    const { data, error } = await sb.from(tabela).select(campos).order('receita_id').range(de, de + BLOCO - 1);
-    if (error) return { data: null, error };
-    todas.push(...data);
-    if (data.length < BLOCO) return { data: todas, error: null };
-  }
-}
-
 /** Texto sem acento e em minúsculas, para a busca ("Pão" vira "pao"). */
 function normalizar(t) {
   return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -299,33 +453,30 @@ function normalizar(t) {
 
 async function telaLista() {
   mensagem('Carregando receitas…');
-  const [rec, ing, ret] = await Promise.all([
-    sb.from('receitas')
-      .select('id, titulo, porcoes, tempo_preparo_min, imagem_caminho, categoria_id, utensilios, fonte_autor')
-      .order('atualizada_em', { ascending: false }),
-    lerTudo('ingredientes', 'receita_id, nome'),
-    lerTudo('receita_etiquetas', 'receita_id, etiqueta_id')
-  ]);
-  for (const x of [rec, ing, ret]) if (x.error) return mensagem(erroAmigavel(x.error), 'erro');
-  const data = rec.data;
-  try { await carregarEtiquetas(); } catch { /* busca segue sem etiquetas */ }
+  if (!estado.colecao) {
+    try { await atualizarColecao(); } catch (e) { return mensagem(erroAmigavel(e), 'erro'); }
+  }
+  const c = estado.colecao;
+  const data = c.receitas;
 
   // Texto de busca de cada receita: nome, ingredientes, etiquetas, utensílios e autor.
   const textoBusca = new Map(data.map(r => [r.id, [r.titulo, ...(r.utensilios || []), r.fonte_autor]]));
-  for (const i of ing.data) textoBusca.get(i.receita_id)?.push(i.nome);
-  const nomeEtiqueta = new Map(estado.etiquetas.map(e => [e.id, e.nome]));
-  for (const x of ret.data) textoBusca.get(x.receita_id)?.push(nomeEtiqueta.get(x.etiqueta_id));
+  for (const i of c.ingredientes) textoBusca.get(i.receita_id)?.push(i.nome);
+  const nomeEtiqueta = new Map(c.etiquetas.map(e => [e.id, e.nome]));
+  for (const x of c.receita_etiquetas) textoBusca.get(x.receita_id)?.push(nomeEtiqueta.get(x.etiqueta_id));
   for (const [id, partes] of textoBusca) textoBusca.set(id, normalizar(partes.filter(Boolean).join(' | ')));
 
   const urls = await urlsDasImagens(data.map(r => r.imagem_caminho));
   const titulo = el('h1');
   const cabecalho = el('div', { class: 'cabecalho-lista' },
     titulo,
-    el('a', { class: 'botao principal', href: '#/nova' }, '+ Nova'));
+    estado.titular ? el('a', { class: 'botao principal', href: '#/nova' }, '+ Nova') : null);
 
   if (!data.length) {
     titulo.textContent = 'Minhas receitas';
-    return mostrar(cabecalho, el('p', { class: 'aviso', text: 'Nenhuma receita ainda. Toque em "+ Nova" para cadastrar a primeira.' }));
+    return mostrar(cabecalho, el('p', { class: 'aviso', text: estado.titular
+      ? 'Nenhuma receita ainda. Toque em "+ Nova" para cadastrar a primeira.'
+      : 'Ainda não há receitas compartilhadas com você. Peça ao dono do app para incluir o seu e-mail.' }));
   }
 
   let filtro = lerPreferencia('categoria', 'todas');
@@ -453,16 +604,76 @@ async function telaReceita(id) {
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
     el('div', { class: 'acoes' },
-      el('a', { class: 'botao', href: `#/editar/${r.id}` }, 'Editar'),
-      el('button', { class: 'botao perigo', type: 'button', onclick: () => excluirReceita(r) }, 'Excluir'))
+      el('button', { class: 'botao', type: 'button', onclick: () => compartilharReceita(r) }, 'Compartilhar'),
+      el('button', { class: 'botao', type: 'button', onclick: (ev) => copiarReceita(r, ev.currentTarget) }, 'Copiar texto'),
+      estado.titular ? el('a', { class: 'botao', href: `#/editar/${r.id}` }, 'Editar') : null,
+      estado.titular ? el('button', { class: 'botao perigo', type: 'button', onclick: () => excluirReceita(r) }, 'Excluir') : null)
   ));
 }
 
+// ---------------------------------------------------------------------
+// Compartilhar uma receita (versão 11): texto pronto para WhatsApp
+// ---------------------------------------------------------------------
+
+/** Receita em texto simples (negrito no padrão do WhatsApp: *texto*). */
+function textoDaReceita(r) {
+  const linhas = [`*${r.titulo}*`];
+  const resumo = [r.porcoes ? `${formatarNumero(r.porcoes)} porções` : null,
+    r.tempo_preparo_min ? `Preparo: ${minutosTexto(r.tempo_preparo_min)}` : null,
+    r.tempo_total_min ? `Total: ${minutosTexto(r.tempo_total_min)}` : null].filter(Boolean).join(' · ');
+  if (resumo) linhas.push(resumo);
+  if (r.ingredientes.length) {
+    linhas.push('', '*Ingredientes*');
+    let grupo = null;
+    for (const i of r.ingredientes) {
+      if ((i.grupo || null) !== grupo) { grupo = i.grupo || null; if (grupo) linhas.push(`_${grupo}_`); }
+      const qtd = [i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : null, i.unidade].filter(Boolean).join(' ');
+      linhas.push(`• ${qtd ? qtd + ' ' : ''}${i.nome}${i.observacao ? ` (${i.observacao})` : ''}`);
+    }
+  }
+  if ((r.utensilios || []).length) linhas.push('', '*Utensílios*', r.utensilios.join(', '));
+  if (r.passos.length) {
+    linhas.push('', '*Modo de preparo*');
+    let grupo = null;
+    r.passos.forEach((p, n) => {
+      if ((p.grupo || null) !== grupo) { grupo = p.grupo || null; if (grupo) linhas.push(`_${grupo}_`); }
+      linhas.push(`${n + 1}. ${p.texto}`);
+    });
+  }
+  if (r.observacoes) linhas.push('', '*Observações*', r.observacoes);
+  const link = linkSeguro(r.fonte_url);
+  if (link || r.fonte_autor) linhas.push('', `Fonte: ${[r.fonte_autor, link].filter(Boolean).join(' · ')}`);
+  linhas.push('', 'Enviada pelo app Receitas na mão');
+  return linhas.join('\n');
+}
+
+/** Abre o compartilhamento do aparelho (WhatsApp, e-mail...); sem ele, abre o WhatsApp. */
+async function compartilharReceita(r) {
+  const texto = textoDaReceita(r);
+  if (navigator.share) {
+    try { await navigator.share({ title: r.titulo, text: texto }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; /* sem suporte: segue para o WhatsApp */ }
+  }
+  window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+}
+
+async function copiarReceita(r, botao) {
+  try {
+    await navigator.clipboard.writeText(textoDaReceita(r));
+    botao.textContent = 'Copiado ✓';
+  } catch {
+    botao.textContent = 'Não consegui copiar';
+  }
+  setTimeout(() => { botao.textContent = 'Copiar texto'; }, 2500);
+}
+
 async function excluirReceita(r) {
+  if (estado.semConexao) return alert('Sem internet: para excluir, conecte-se.');
   if (!confirm(`Excluir "${r.titulo}"? Não dá para desfazer.`)) return;
   const { error } = await sb.from('receitas').delete().eq('id', r.id);
   if (error) return alert(erroAmigavel(error));
   if (r.imagem_caminho) await sb.storage.from(PASTA_IMAGENS).remove([r.imagem_caminho]);
+  try { await atualizarColecao(); } catch { estado.colecao = null; }
   location.hash = '#/';
 }
 
@@ -699,6 +910,8 @@ async function telaFormulario(id, revisao = null) {
       // Foto antiga substituída ou removida: apaga do armazenamento.
       if (caminhoAntigo && caminhoAntigo !== caminhoImagem) await sb.storage.from(PASTA_IMAGENS).remove([caminhoAntigo]);
       if (urlPrevia) URL.revokeObjectURL(urlPrevia);
+      status.textContent = 'Atualizando a cópia no aparelho…';
+      try { await atualizarColecao(); } catch { estado.colecao = null; /* a lista baixa de novo */ }
       if (revisao) revisao.aoSalvar(idReceita);
       else location.hash = `#/receita/${idReceita}`;
     } catch (e) {
@@ -1223,18 +1436,42 @@ async function telaRevisao() {
   });
 }
 
-function telaAjustes() {
+async function telaAjustes() {
+  const c = estado.colecao;
+  const fotos = (await chavesLocal('capas')).length;
+  const plural = (n, palavra) => `${n} ${palavra}${n === 1 ? '' : 's'}`;
+  const copia = el('span', { text: c ? `${plural(c.receitas.length, 'receita')}, ${plural(fotos, 'foto')}, atualizada em ${dataHoraCurta(c.salva_em)}` : 'ainda não feita' });
+  const status = el('div', { class: 'status', role: 'status' });
   mostrar(el('section', {},
     el('p', {}, el('a', { href: '#/' }, '← Voltar')),
     el('h1', { text: 'Ajustes' }),
     el('ul', { class: 'lista-info' },
       el('li', {}, el('span', { text: 'Conta' }), el('span', { text: estado.usuario?.email || '' })),
-      el('li', {}, el('span', { text: 'Versão do app' }), el('span', { text: VERSAO }))),
+      el('li', {}, el('span', { text: 'Versão do app' }), el('span', { text: VERSAO })),
+      el('li', {}, el('span', { text: 'Cópia sem internet' }), copia),
+      estado.titular ? null : el('li', {}, el('span', { text: 'Tipo de conta' }), el('span', { text: 'Só leitura (receitas compartilhadas com você)' }))),
+    el('p', { class: 'ajuda', text: 'O app guarda todas as receitas e fotos neste aparelho e atualiza a cópia sempre que abre com internet. Sem internet dá para ver, buscar e abrir receitas; importar, salvar, editar e excluir precisam de conexão.' }),
     el('div', { class: 'acoes' },
       el('button', {
+        class: 'botao', type: 'button', disabled: estado.semConexao,
+        onclick: async (ev) => {
+          ev.currentTarget.disabled = true; status.textContent = 'Atualizando…';
+          try { await atualizarColecao(); await baixarCapas(estado.colecao); telaAjustes(); }
+          catch (e) { status.textContent = erroAmigavel(e); ev.currentTarget.disabled = false; }
+        }
+      }, 'Atualizar cópia agora'),
+      el('button', {
         class: 'botao', type: 'button',
-        onclick: async () => { await sb.auth.signOut(); estado.urlsAssinadas.clear(); location.hash = '#/'; }
-      }, 'Sair'))
+        onclick: async () => {
+          await limparCopiaLocal();
+          try { await sb.auth.signOut(); } catch { /* sem internet: a sessão local é apagada mesmo assim */ }
+          estado.urlsAssinadas.clear(); estado.usuario = null; estado.semConexao = false; estado.semSessao = false;
+          location.hash = '#/'; mostrarFaixa(); telaLogin();
+        }
+      }, 'Sair')),
+    el('p', { class: 'ajuda', text: 'Sair apaga a cópia guardada neste aparelho.' }),
+    status,
+    estado.titular ? secaoLeitores() : null
   ));
 }
 
@@ -1247,6 +1484,20 @@ async function rotear() {
   topo.hidden = false;
   const rota = location.hash.replace(/^#/, '') || '/';
   const partes = rota.split('/').filter(Boolean);
+  if (!estado.titular && ['nova', 'manual', 'editar', 'revisar'].includes(partes[0])) {
+    return mostrar(el('section', {},
+      el('p', {}, el('a', { href: '#/' }, '← Voltar')),
+      el('h1', { text: 'Conta só de leitura' }),
+      el('p', { class: 'aviso', text: 'Você pode ver, buscar e compartilhar as receitas. Cadastrar, importar e editar é só para o dono do app.' })));
+  }
+  if (estado.semConexao && ['nova', 'manual', 'editar', 'revisar'].includes(partes[0])) {
+    return mostrar(el('section', {},
+      el('p', {}, el('a', { href: '#/' }, '← Voltar')),
+      el('h1', { text: 'Precisa de internet' }),
+      el('p', { class: 'aviso', text: estado.semSessao
+        ? 'Sua sessão venceu. Para importar, cadastrar ou editar receitas, entre de novo com internet.'
+        : 'Sem internet agora. Para importar, cadastrar ou editar receitas, conecte-se. Ver e buscar receitas funciona normalmente.' })));
+  }
   try {
     if (partes[0] === 'receita' && partes[1]) return await telaReceita(partes[1]);
     if (partes[0] === 'editar' && partes[1]) return await telaFormulario(partes[1]);
@@ -1260,42 +1511,133 @@ async function rotear() {
   }
 }
 
-/** Desliga service worker instalado por engano no endereço deste app
- *  (o do Controle Financeiro, em 01/11/2026). Não mexe no de outros apps. */
-function desligarServiceWorkerIntruso() {
+/** Ajustes do titular: e-mails de amigos e família que podem ver as receitas (versão 11). */
+function secaoLeitores() {
+  const lista = el('ul', { class: 'lista-info' });
+  const email = el('input', { type: 'email', maxlength: 254, autocomplete: 'off', inputmode: 'email',
+    placeholder: 'email@gmail.com', 'aria-label': 'E-mail de quem pode ver' });
+  const status = el('div', { class: 'status', role: 'status' });
+  const botao = el('button', { class: 'botao', type: 'button', disabled: estado.semConexao }, 'Autorizar');
+  async function carregar() {
+    if (estado.semConexao) { lista.replaceChildren(el('li', { text: 'Precisa de internet para ver ou mudar a lista.' })); return; }
+    const { data, error } = await sb.from('leitores').select('email, criado_em').order('email');
+    if (error) { lista.replaceChildren(el('li', { text: /leitores/.test(error.message || '') ? 'Rode o script 09 no Supabase para ativar.' : erroAmigavel(error) })); return; }
+    if (!data.length) { lista.replaceChildren(el('li', { text: 'Ninguém ainda.' })); return; }
+    lista.replaceChildren(...data.map(l => el('li', {},
+      el('span', { text: l.email }),
+      el('button', { class: 'botao pequeno perigo', type: 'button', 'aria-label': `Remover ${l.email}`,
+        onclick: async () => {
+          if (!confirm(`Tirar o acesso de ${l.email}?`)) return;
+          const { error: e } = await sb.from('leitores').delete().eq('email', l.email);
+          status.textContent = e ? erroAmigavel(e) : `${l.email} não vê mais as receitas.`;
+          carregar();
+        } }, 'Remover'))));
+  }
+  botao.addEventListener('click', async () => {
+    const valor = email.value.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(valor)) { status.textContent = 'Digite um e-mail válido.'; return; }
+    if (valor === (estado.usuario?.email || '').toLowerCase()) { status.textContent = 'Esse é o seu e-mail.'; return; }
+    botao.disabled = true;
+    const { error } = await sb.from('leitores').insert({ email: valor });
+    botao.disabled = false;
+    if (error) { status.textContent = /duplicate|23505/.test(error.message + error.code) ? 'Esse e-mail já está na lista.' : erroAmigavel(error); return; }
+    email.value = '';
+    status.textContent = `${valor} autorizado. Falta cadastrar no Google Cloud e no Supabase (veja o roteiro).`;
+    carregar();
+  });
+  carregar();
+  return el('div', {},
+    el('h2', { text: 'Quem pode ver as receitas' }),
+    el('p', { class: 'ajuda', text: 'Amigos e família entram com a conta Google e só visualizam: não importam, não editam e não excluem. Tirar o e-mail corta o acesso.' }),
+    lista,
+    el('div', { class: 'linha-autorizar' }, email, botao),
+    status);
+}
+
+/** Service worker (versão 10): guarda os arquivos do app para abrir sem internet.
+ *  Antes, desliga o "sw.js" do incidente de 01/11/2026, se ainda estiver ativo. */
+async function registrarServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.getRegistrations().then(registros => {
-    for (const r of registros) {
-      if (new URL(r.scope).pathname.startsWith('/receitas-na-mao/')) r.unregister();
+  try {
+    for (const r of await navigator.serviceWorker.getRegistrations()) {
+      const script = (r.active || r.waiting || r.installing)?.scriptURL || '';
+      if (script.endsWith('/sw.js')) await r.unregister();
     }
-  }).catch(() => {});
+    await navigator.serviceWorker.register('service-worker.js');
+    navigator.storage?.persist?.().catch(() => {}); // pede ao navegador para não apagar a cópia
+  } catch { /* o app funciona só com internet */ }
+}
+
+/** Faixa no topo quando o app está mostrando a cópia guardada. */
+function mostrarFaixa() {
+  let faixa = document.getElementById('faixa-offline');
+  if (!estado.semConexao || !estado.colecao) { faixa?.remove(); return; }
+  if (!faixa) { faixa = el('div', { id: 'faixa-offline', class: 'faixa-offline', role: 'status' }); topo.after(faixa); }
+  faixa.replaceChildren(...[
+    estado.semSessao ? 'Sessão vencida: mostrando a cópia deste aparelho. ' : `Sem internet: mostrando a cópia de ${dataHoraCurta(estado.colecao.salva_em)}. `,
+    estado.semSessao ? el('button', { class: 'botao pequeno', type: 'button', onclick: () => { estado.semConexao = false; estado.semSessao = false; estado.usuario = null; mostrarFaixa(); telaLogin(); } }, 'Entrar') : null
+  ].filter(Boolean));
+}
+
+/** Volta a falar com o Supabase quando a internet volta. */
+async function tentarReconectar() {
+  if (!estado.semConexao || estado.semSessao || !estado.usuario) return;
+  try {
+    await comLimite(atualizarColecao(), 15000);
+    mostrarFaixa();
+    if (/^#?\/?$/.test(location.hash) || location.hash.startsWith('#/receita/')) rotear();
+  } catch { /* continua com a cópia */ }
 }
 
 async function iniciar() {
-  desligarServiceWorkerIntruso();
+  registrarServiceWorker();
   // Retorno do Google com erro (ex.: conta não autorizada).
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const erroLogin = params.get('error_description') || new URLSearchParams(location.search).get('error_description');
 
-  const { data } = await sb.auth.getSession();
+  const local = await lerLocal('dados', 'colecao');
+  let sessao = null;
+  try { sessao = (await sb.auth.getSession()).data.session; } catch { /* sem internet para renovar */ }
   if (location.hash.includes('access_token') || erroLogin) history.replaceState(null, '', location.pathname + '#/');
   if (location.search) history.replaceState(null, '', location.pathname + location.hash);
 
-  if (!data.session) {
+  window.addEventListener('hashchange', rotear);
+  window.addEventListener('online', tentarReconectar);
+  window.addEventListener('offline', () => { if (estado.colecao) { estado.semConexao = true; mostrarFaixa(); } });
+
+  if (!sessao) {
+    // Sem sessão (venceu sem internet): mostra a cópia, se houver; senão, login.
+    if (local && !erroLogin) {
+      estado.usuario = { id: local.usuario_id, email: local.email };
+      estado.titular = local.titular !== false;
+      aplicarColecao(local);
+      estado.semConexao = true; estado.semSessao = true;
+      mostrarFaixa();
+      return rotear();
+    }
     return telaLogin(erroLogin ? 'Não foi possível entrar com essa conta.' : null);
   }
-  estado.usuario = data.session.user;
+  estado.usuario = sessao.user;
+  if (local && local.usuario_id === sessao.user.id) { aplicarColecao(local); estado.titular = local.titular !== false; }
+  else if (local) await limparCopiaLocal(); // cópia de outra conta: apaga
+
   try {
-    await carregarCategorias();
+    // Titular ou só leitura? Sem o script 09, a função não existe: segue como titular.
+    const papel = await comLimite(sb.rpc('eh_titular'), local ? 6000 : 20000);
+    if (!papel.error) estado.titular = papel.data !== false;
+    await comLimite(carregarCategorias(), local ? 6000 : 20000); // cria as categorias no 1º acesso
+    await comLimite(atualizarColecao(), local ? 8000 : 30000);
   } catch (e) {
-    return mensagem(erroAmigavel(e), 'erro');
+    if (!estado.colecao) return mensagem(erroAmigavel(e), 'erro');
+    estado.semConexao = true; // segue com a cópia guardada
   }
-  window.addEventListener('hashchange', rotear);
+  mostrarFaixa();
   rotear();
 }
 
 sb.auth.onAuthStateChange((evento, sessao) => {
   if (evento === 'SIGNED_OUT') {
+    if (estado.semSessao) return; // mostrando a cópia: o login fica para quando houver internet
     estado.usuario = null;
     telaLogin();
   } else if (sessao) {

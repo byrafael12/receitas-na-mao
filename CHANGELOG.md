@@ -1,5 +1,26 @@
 # Histórico de versões
 
+## Versão 11 (02/11/2026), Entrega 4: compartilhar com amigos e família
+
+- **Compartilhar receita** (opção A): botões **Compartilhar** e **Copiar texto** na receita. O texto sai pronto para o WhatsApp (título em negrito, porções e tempos, ingredientes e preparo com grupos, utensílios, observações, fonte com link). No iPhone e no Windows abre o compartilhamento do aparelho; sem ele, abre o WhatsApp. Funciona também sem internet.
+- **Contas só de leitura** (opção B): em Ajustes, **Quem pode ver as receitas**: o titular autoriza e remove e-mails. Quem entra com um e-mail autorizado vê, busca, compartilha e usa sem internet, mas não vê "+ Nova", Editar e Excluir; as telas de importar, cadastrar e editar mostram "Conta só de leitura". Tirar o e-mail corta o acesso na próxima abertura com internet.
+- A regra fica no banco (script `supabase/09-compartilhar-leitura.sql`): só o titular grava (receitas, fotos, categorias, etiquetas, importações); leitores autorizados só leem; leitores não veem importações nem a lista de e-mails. A função da IA recusa contas de leitura (403).
+- Ajustes: "1 receita" no singular; campo de e-mail com o mesmo estilo dos outros.
+- Testes locais: banco 26 de 26, função 77 de 77, compartilhar e leitura 21 de 21, sem internet 17 de 17, importação 47 de 47, cadastro 25 de 25, lista 30 de 30, service worker do incidente 5 de 5.
+
+## Versão 10 (02/11/2026), Entrega 4: funcionar sem internet
+
+- **Cópia de todas as receitas e fotos no aparelho** (IndexedDB, o banco do próprio navegador). O app atualiza a cópia sempre que abre com internet, depois de salvar ou excluir, e pelo botão **Atualizar cópia agora** em Ajustes.
+- **Service worker** (`service-worker.js`): guarda os arquivos do app. Com internet, busca sempre a versão nova (rede primeiro); sem internet ou com rede lenta (mais de 4 s), usa a cópia. Só mexe nos caches "receitas-app-" (o Controle Financeiro, no mesmo endereço, não é afetado).
+- **Sem internet**: lista, busca, abas e receitas (com fotos) funcionam. Faixa no topo: "Sem internet: mostrando a cópia de dd/mm, hh:mm". Importar, cadastrar e editar mostram "Precisa de internet"; excluir avisa. Quando a internet volta, a faixa some e a cópia é atualizada sozinha.
+- **Sessão vencida sem internet**: as receitas continuam visíveis, com botão **Entrar** para quando houver conexão.
+- **Sair apaga a cópia** deste aparelho. Login de outra conta no mesmo aparelho também apaga a cópia anterior.
+- Fotos passam a vir da cópia do aparelho também com internet (mais rápido e menos tráfego no Supabase).
+- Leitura das tabelas em blocos de 1.000 com ordem única por id (antes, a busca ordenava só por receita, o que podia repetir ou pular linhas a partir de 1.000).
+- O `sw.js` do incidente de 01/11, se ainda estiver ativo em algum aparelho, é trocado pelo `service-worker.js`.
+- Sem SQL e sem mudança na função da IA.
+- Testes locais: sem internet 17 de 17, troca do service worker do incidente 5 de 5, importação 47 de 47, cadastro 25 de 25, lista 30 de 30.
+
 ## Versão 9.2 (02/11/2026), ajustes pedidos no teste da Entrega 3
 
 - **Grupos no modo de preparo**: botão **+ Grupo** também no preparo (ex.: Massa, Recheio, Cobertura), como já existia nos ingredientes. A numeração dos passos segue corrida entre os grupos (1, 2, 3...). Na tela da receita, cada grupo aparece com seu título.

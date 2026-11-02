@@ -139,7 +139,7 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 .campo { display: block; margin-bottom: 14px; }
 .campo > span { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
 .campo small { color: var(--texto-suave); font-weight: 400; }
-input[type="text"], input[type="url"], input[type="number"], input[type="search"], select, textarea {
+input[type="text"], input[type="url"], input[type="number"], input[type="search"], input[type="email"], select, textarea {
   width: 100%; min-height: 44px; padding: 10px 12px;
   border: 1px solid var(--borda); border-radius: 10px;
   background: var(--superficie); color: var(--texto); font: inherit;
@@ -176,3 +176,9 @@ input[type="file"] { max-width: 100%; }
 
 /* Busca (versão 8) */
 .busca { margin-bottom: 10px; -webkit-appearance: none; appearance: none; }
+
+/* Sem internet (versão 10) */
+.faixa-offline { position: sticky; top: calc(61px + env(safe-area-inset-top)); z-index: 9; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; background: var(--superficie); border-bottom: 1px solid var(--destaque); color: var(--texto); font-size: 0.9rem; }
+
+/* Compartilhar (versão 11) */
+.linha-autorizar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; }
