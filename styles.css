@@ -205,3 +205,7 @@ input[type="file"] { max-width: 100%; }
 .opcao { display: flex; align-items: center; gap: 8px; margin: 8px 0; min-height: 44px; }
 .opcao input { width: 22px; height: 22px; }
 h3 { font-size: 1rem; margin: 18px 0 6px; }
+
+/* Versão 16: aviso de receita já importada (mesmo link) */
+.aviso-repetida { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--destaque); background: var(--superficie); font-size: 0.9rem; }
+.aviso-repetida[hidden] { display: none; }

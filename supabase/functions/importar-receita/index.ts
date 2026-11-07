@@ -1,5 +1,5 @@
 // =====================================================================
-// Receitas na mão · Edge Function "importar-receita" (Entregas 2 e 3)
+// Receitas na mão · Edge Function "importar-receita" (Entregas 2 e 3, versão 16)
 //
 // Recebe do app: legenda (texto), imagens (prints), quadros e áudio de
 // vídeo e um link (site de receita, YouTube, Instagram ou TikTok), em
@@ -11,7 +11,7 @@
 //  - Só aceita chamadas do endereço do app e de usuário logado (o
 //    Supabase confere o crachá/JWT antes; aqui conferimos de novo) e
 //    titular (contas de leitura, script 09, são recusadas).
-//  - Limite de 50 importações por dia, para conter gasto.
+//  - Limite de importações por dia, para conter gasto (50; 150 até 31/01/2027).
 //  - Links: só http/https, portas padrão, sem endereço interno (rede
 //    local, nuvem), conferindo de novo a cada redirecionamento; página até
 //    2 MB, imagem até 3 MB, 10 s por download (proteção contra SSRF).
@@ -27,7 +27,9 @@ const MODELO = Deno.env.get('GEMINI_MODELO') || 'gemini-3.1-flash-lite';
 const MODELO_RESERVA = Deno.env.get('GEMINI_MODELO_RESERVA') || 'gemini-3.5-flash-lite';
 const TEMPO_TOTAL_MS = 125_000; // a função gratuita do Supabase vive até 150 s
 const GEMINI_BASE = Deno.env.get('GEMINI_URL') || 'https://generativelanguage.googleapis.com/v1beta';
-const LIMITE_POR_DIA = 50;
+// Versão 16: 150 por dia até 31/01/2027 (migração das receitas salvas no
+// Instagram); a partir de 01/02/2027 volta sozinho a 50.
+const LIMITE_POR_DIA = Date.now() < Date.parse('2027-02-01T03:00:00Z') ? 150 : 50;
 const MAX_CORPO = 18_000_000;       // bytes do pedido inteiro
 const MAX_TEXTO = 20_000;           // letras da legenda
 const MAX_IMAGENS = 10;             // prints

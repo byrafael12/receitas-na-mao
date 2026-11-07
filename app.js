@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '15';
+const VERSAO = '16';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -1428,6 +1428,84 @@ function base64ParaBlob(dados, mime) {
   return new Blob([bytes], { type: mime });
 }
 
+// ---------------------------------------------------------------------
+// Versão 16: receitas salvas no Instagram. Duas formas, uma por vez:
+//  - colar a legenda (e o link) aqui;
+//  - botão "Enviar para Receitas" da extensão do Chrome (pasta
+//    extensao-chrome do projeto), que lê o post na tela do próprio Rafael
+//    e entrega legenda, link, autor e foto a esta tela.
+// O Instagram não deixa a função da IA abrir o post (bloqueia servidores),
+// então com legenda ou imagens o link do Instagram vira só a fonte.
+// ---------------------------------------------------------------------
+const MENSAGEM_EXTENSAO = 'receitas-na-mao/';
+
+/** Instagram e Facebook: o servidor não consegue abrir o post. */
+function redeSemLeitura(url) {
+  try { return /(^|\.)(instagram\.com|instagr\.am|facebook\.com|fb\.watch)$/i.test(new URL(url).hostname); } catch { return false; }
+}
+
+/** Identidade do link para achar receita repetida (código do post, vídeo ou endereço). */
+function chaveDoLink(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, '');
+    if (/^(instagram\.com|instagr\.am)$/.test(host)) {
+      const m = u.pathname.match(/\/(?:p|reels?|tv)\/([\w-]+)/);
+      if (m) return 'ig:' + m[1];
+    }
+    if (host === 'youtu.be') return 'yt:' + u.pathname.split('/')[1];
+    if (/(^|\.)youtube\.com$/.test(host)) {
+      const id = u.searchParams.get('v') || u.pathname.match(/\/(?:shorts|embed|live)\/([\w-]+)/)?.[1];
+      if (id) return 'yt:' + id;
+    }
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_|fbclid|igsh|si$)/i.test(k)) u.searchParams.delete(k);
+    return host + u.pathname.replace(/\/+$/, '') + (u.searchParams.toString() ? '?' + u.searchParams : '');
+  } catch { return null; }
+}
+
+function receitaComMesmoLink(url) {
+  const chave = chaveDoLink(url);
+  if (!chave) return null;
+  return (estado.colecao?.receitas || []).find(r => r.fonte_url && chaveDoLink(r.fonte_url) === chave) || null;
+}
+
+/** Confere o que a extensão mandou (nunca confiar no formato). */
+function postValido(d) {
+  if (!d || typeof d !== 'object') return null;
+  const link = typeof d.link === 'string' ? linkSeguro(d.link) : null;
+  if (!link || !redeSemLeitura(link)) return null;
+  const legenda = typeof d.legenda === 'string' ? d.legenda.slice(0, 20000) : '';
+  const autor = typeof d.autor === 'string' && /^@?[\w.]{1,40}$/.test(d.autor) ? '@' + d.autor.replace(/^@/, '') : null;
+  let imagem = null;
+  const i = d.imagem;
+  if (i && /^image\/(jpeg|png|webp)$/.test(i.mime) && typeof i.dados === 'string' && i.dados.length < 7_000_000) {
+    try { imagem = new File([base64ParaBlob(i.dados, i.mime)], 'post-instagram.' + i.mime.split('/')[1], { type: i.mime }); } catch { /* sem a foto */ }
+  }
+  return { link, legenda, autor, imagem };
+}
+
+/** Pede à extensão o post guardado. Sem a extensão (iPhone, outro navegador), nada acontece. */
+function pedirPostDaExtensao(aoReceber) {
+  const ouvir = (ev) => {
+    if (ev.source !== window || ev.origin !== location.origin || ev.data?.tipo !== MENSAGEM_EXTENSAO + 'post') return;
+    window.removeEventListener('message', ouvir);
+    const p = postValido(ev.data.dados);
+    if (p) aoReceber(p);
+  };
+  window.addEventListener('message', ouvir);
+  setTimeout(() => window.removeEventListener('message', ouvir), 5000);
+  window.postMessage({ tipo: MENSAGEM_EXTENSAO + 'pedir-post' }, location.origin);
+}
+
+// A extensão avisa quando há post novo com o app já aberto: vai para a Nova receita,
+// sem sair de uma revisão ou edição em andamento.
+window.addEventListener('message', (ev) => {
+  if (ev.source !== window || ev.origin !== location.origin || ev.data?.tipo !== MENSAGEM_EXTENSAO + 'post-disponivel') return;
+  if (!estado.usuario || !estado.titular) return;
+  if (/^#\/(revisar|editar|manual)/.test(location.hash)) return;
+  if (location.hash === '#/nova') telaImportar(); else location.hash = '#/nova';
+});
+
 function telaImportar() {
   const legenda = el('textarea', { maxlength: 20000, 'aria-label': 'Legenda ou texto da receita',
     placeholder: 'Cole aqui a legenda do post ou o texto da receita (opcional)' });
@@ -1435,6 +1513,16 @@ function telaImportar() {
   const entradaVideo = el('input', { type: 'file', accept: 'video/*', 'aria-label': 'Vídeo' });
   const link = el('input', { type: 'url', maxlength: 2000, inputmode: 'url', autocomplete: 'off',
     placeholder: 'https:// site de receita, YouTube, Instagram ou TikTok', 'aria-label': 'Link da receita' });
+  const avisoRepetida = el('p', { class: 'aviso-repetida', role: 'status', hidden: true });
+  const conferirRepetida = () => {
+    const valor = link.value.trim();
+    const r = linkSeguro(valor) ? receitaComMesmoLink(valor) : null;
+    avisoRepetida.hidden = !r;
+    if (r) avisoRepetida.replaceChildren('Você já tem esta receita: ', el('a', { href: `#/receita/${r.id}`, text: r.titulo }), '. Se ler de novo, vai criar outra.');
+    return r;
+  };
+  link.addEventListener('input', conferirRepetida);
+  let autorExtensao = null;
   const resumo = el('p', { class: 'ajuda' });
   const status = el('div', { class: 'status', role: 'status' });
   const botao = el('button', { class: 'botao principal', type: 'button' }, 'Ler receita com IA');
@@ -1456,7 +1544,7 @@ function telaImportar() {
     if (legenda.value.trim()) partes.push('legenda');
     if (entradaImagens.files.length) partes.push(`${entradaImagens.files.length} imagem(ns)`);
     if (entradaVideo.files.length) partes.push('1 vídeo');
-    resumo.textContent = partes.length ? 'Vai enviar: ' + partes.join(' + ') + '.' : 'Use uma ou mais opções. Site ou YouTube: só o link basta. Instagram: vídeo + legenda dá o melhor resultado.';
+    resumo.textContent = partes.length ? 'Vai enviar: ' + partes.join(' + ') + '.' : 'Use uma ou mais opções. Site ou YouTube: só o link basta. Instagram: link + legenda (e o vídeo, se a receita for falada).';
   };
   [link, legenda, entradaImagens, entradaVideo].forEach(e => e.addEventListener('input', atualizarResumo));
   entradaImagens.addEventListener('change', atualizarResumo);
@@ -1472,6 +1560,8 @@ function telaImportar() {
     if (!texto && !imagens.length && !video && !linkFonte) { status.className = 'status erro'; status.textContent = 'Cole um link ou a legenda, ou escolha imagens ou um vídeo.'; return; }
     if (linkFonte && !linkSeguro(linkFonte)) { status.className = 'status erro'; status.textContent = 'Link: copie o endereço completo, começando com https://'; return; }
     if (entradaImagens.files.length > MAX_PRINTS) { status.textContent = `Usando só as ${MAX_PRINTS} primeiras imagens.`; }
+    // Instagram/Facebook com legenda, prints ou vídeo: o link vai só como fonte (o servidor seria bloqueado).
+    const linkSoFonte = !!linkFonte && redeSemLeitura(linkFonte) && !!(texto || imagens.length || video);
 
     botao.disabled = true;
     cancelado = false;
@@ -1481,14 +1571,14 @@ function telaImportar() {
     const relogio = setInterval(() => { botao.textContent = `Lendo… ${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
     const avisos = [];
     try {
-      const corpo = { texto, link: linkFonte || undefined, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
+      const corpo = { texto, link: (linkFonte && !linkSoFonte) ? linkFonte : undefined, imagens: [], quadros: [], categorias: estado.categorias.filter(c => c.ativa).map(c => c.nome) };
       const candidatos = [];
       for (const [i, f] of imagens.entries()) {
         conferirCancelado();
         status.textContent = `Preparando imagem ${i + 1} de ${imagens.length}…`;
         const b = await reduzirImagem(f, 1280, 0.8);
         corpo.imagens.push({ mime: 'image/jpeg', dados: await blobParaBase64(b) });
-        candidatos.push({ blob: f, url: URL.createObjectURL(b) });
+        candidatos.push({ blob: f, url: URL.createObjectURL(b), doLink: f.name.startsWith('post-instagram.') });
       }
       if (video) {
         status.textContent = 'Abrindo o vídeo…';
@@ -1517,7 +1607,7 @@ function telaImportar() {
         }
       }
       conferirCancelado();
-      status.textContent = linkFonte ? 'Abrindo o link e lendo a receita com a IA…' : 'A IA está lendo a receita…';
+      status.textContent = (linkFonte && !linkSoFonte) ? 'Abrindo o link e lendo a receita com a IA…' : 'A IA está lendo a receita…';
       const { data } = await sb.auth.getSession();
       if (!data.session) throw new Error('Sua sessão expirou. Entre de novo.');
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/importar-receita`, {
@@ -1542,8 +1632,8 @@ function telaImportar() {
 
       estado.importacao = {
         receitas: json.receitas, candidatos, link: linkSeguro(json.link?.url || linkFonte) || null, importacaoId: json.importacao_id,
-        fonteTipo: json.link ? json.link.tipo : (video ? 'video' : (imagens.length ? 'print' : 'legenda')),
-        autorLink: json.link?.autor || null,
+        fonteTipo: json.link ? json.link.tipo : linkSoFonte ? 'rede' : (video ? 'video' : (imagens.length ? 'print' : 'legenda')),
+        autorLink: json.link?.autor || autorExtensao || null,
         aviso: [json.aviso, ...avisos].filter(Boolean).join(' '),
         prints: imagens.length, indice: 0, ultimaSalva: null
       };
@@ -1565,7 +1655,7 @@ function telaImportar() {
     el('h1', { text: 'Nova receita' }),
     el('p', { class: 'ajuda' }, 'A IA lê o link, a legenda, os prints e o vídeo e monta a receita para você revisar. ',
       el('a', { href: '#/manual' }, 'Prefere digitar? Cadastro manual')),
-    el('label', { class: 'campo' }, el('span', {}, 'Link ', el('small', { text: 'site de receita e YouTube funcionam sozinhos; Instagram e TikTok, nem sempre' })), link),
+    el('label', { class: 'campo' }, el('span', {}, 'Link ', el('small', { text: 'site de receita e YouTube funcionam sozinhos; no Instagram, cole também a legenda' })), link, avisoRepetida),
     el('label', { class: 'campo' }, el('span', { text: 'Legenda ou texto' }), legenda),
     el('label', { class: 'campo' }, el('span', {}, 'Prints ou fotos ', el('small', { text: `até ${MAX_PRINTS}` })), entradaImagens),
     el('label', { class: 'campo' }, el('span', {}, 'Vídeo ', el('small', { text: 'até 5 minutos; o vídeo não é enviado, só imagens e áudio' })), entradaVideo),
@@ -1573,6 +1663,27 @@ function telaImportar() {
     el('div', { class: 'acoes' }, botao, botaoCancelar),
     status
   ));
+
+  // Post enviado pela extensão do Chrome: preenche e, com legenda, já manda ler.
+  pedirPostDaExtensao((p) => {
+    if (!link.isConnected) return;
+    link.value = p.link;
+    legenda.value = p.legenda;
+    autorExtensao = p.autor;
+    if (p.imagem) { const dt = new DataTransfer(); dt.items.add(p.imagem); entradaImagens.files = dt.files; }
+    atualizarResumo();
+    if (conferirRepetida()) {
+      status.className = 'status erro';
+      status.textContent = 'Post recebido do Instagram, mas você já tem esta receita (veja acima). Para ler de novo, toque em "Ler receita com IA".';
+    } else if (p.legenda.trim().length >= 40) {
+      status.className = 'status';
+      status.textContent = 'Post recebido do Instagram.';
+      botao.click();
+    } else {
+      status.className = 'status erro';
+      status.textContent = 'Post recebido, mas quase sem legenda (a receita deve estar falada no vídeo). Baixe o vídeo e escolha em "Vídeo", ou mande prints.';
+    }
+  });
 }
 
 /** Mostra a receita lida pela IA no formulário, uma de cada vez. */

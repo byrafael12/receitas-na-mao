@@ -34,11 +34,12 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 - A chave `sb_publishable_` e o endereço do projeto Supabase são públicos por definição; o que protege os dados é o RLS: cada linha só é visível ao dono.
 - Cadastro de novos usuários desligado no Supabase; login só com Google, app do Google em modo de teste (só os usuários de teste cadastrados conseguem entrar).
 - Só o titular grava (RLS, script 09). Contas de amigos e família autorizadas em Ajustes só leem; a função da IA recusa essas contas.
-- A chave do Gemini fica só no segredo `GEMINI_API_KEY` do Supabase; a função só aceita o endereço do app e usuário logado, com limite de 50 importações por dia.
+- A chave do Gemini fica só no segredo `GEMINI_API_KEY` do Supabase; a função só aceita o endereço do app e usuário logado, com limite de 50 importações por dia (150 até 31/01/2027, para a migração do Instagram).
 - Links importados: a função só baixa endereços públicos (http/https, portas padrão, nada de rede interna, conferido a cada redirecionamento), com limite de tamanho e de tempo.
 - Sem internet: a cópia das receitas fica só no aparelho de quem está logado (IndexedDB) e é apagada ao tocar em Sair.
 - Todo texto de receita é exibido com `textContent`, nunca com `innerHTML` (proteção contra XSS). Links da fonte só `http` ou `https`.
 - CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe.
+- Extensão do Chrome (versão 16, fica fora deste repositório, na pasta `extensao-chrome` do projeto): o app só aceita da extensão mensagens da própria página, com link do Instagram, legenda e foto conferidos.
 - O backup usa uma função que só lê e só responde a uma chave própria (guardada nas Propriedades do Apps Script); o banco guarda apenas o hash dela. A chave `service_role` não é usada.
 
 ## Versão

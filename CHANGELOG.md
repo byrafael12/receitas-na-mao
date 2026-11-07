@@ -1,5 +1,15 @@
 # Histórico de versões
 
+## Versão 16 (07/11/2026): receitas salvas no Instagram
+
+- **Extensão do Chrome** (pasta `extensao-chrome` do projeto, fora deste repositório): botão **🍳 Enviar para Receitas** nos posts e reels do instagram.com. Lê o post na tela do próprio usuário (legenda, autor e foto) e abre ou reaproveita a aba do app na **Nova receita**, que já manda ler com a IA. Um clique, um post; sem robô.
+- **Colar a legenda** (sem extensão, também no iPhone): com legenda, prints ou vídeo, o link do Instagram ou Facebook vai só como fonte; a função da IA não tenta mais abrir o post (era bloqueada) e o aviso "Link não lido" some.
+- **Receita repetida**: ao colar ou receber um link já importado (mesmo post do Instagram, mesmo vídeo do YouTube ou mesmo endereço), o app avisa com link para a receita existente; pela extensão, não chama a IA.
+- Reel sem legenda: o app preenche link, autor e foto e pede o vídeo ou prints.
+- Função da IA: limite de **150 importações por dia até 31/01/2027**; volta sozinho a 50 em 01/02/2027.
+- Sem SQL.
+- Testes locais: extensão 26 de 26, função 80 de 80, importação 47 de 47, cadastro 25 de 25, lista 30 de 30, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, service worker 5 de 5.
+
 ## Versão 15 (02/11/2026), Entrega 4: correções da avaliação de segurança
 
 - **S1, login PKCE**: o Google devolve só um código de uso único (`?code=`), trocado pela sessão com um segredo guardado no aparelho. O crachá de acesso não passa mais pelo endereço nem fica no histórico do navegador. Se a troca falhar (ex.: o login abriu numa janela separada no iPhone), o app mostra "O login não terminou neste aparelho" em vez de travar. Para voltar ao modo antigo: em `app.js`, trocar `flowType: 'pkce'` por `flowType: 'implicit'`.
