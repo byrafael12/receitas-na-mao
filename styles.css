@@ -209,3 +209,14 @@ h3 { font-size: 1rem; margin: 18px 0 6px; }
 /* Versão 16: aviso de receita já importada (mesmo link) */
 .aviso-repetida { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--destaque); background: var(--superficie); font-size: 0.9rem; }
 .aviso-repetida[hidden] { display: none; }
+
+/* Versão 17: foto em cada passo e vídeo original */
+.passos .foto-passo { display: block; width: 100%; max-width: 420px; max-height: 260px; object-fit: cover; margin-top: 6px; border-radius: 10px; }
+.controle-foto-passo { grid-column: 2 / 3; }
+.controle-foto-passo .acoes { margin-top: 0; }
+.foto-passo-mini img { width: 120px; height: 90px; object-fit: cover; border-radius: 8px; display: block; margin-bottom: 4px; }
+.bloco-video { margin: 0 0 12px; }
+.area-video { margin-top: 8px; }
+.area-video .video { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 10px; background: #000; }
+.area-video .video.vertical { max-width: 380px; aspect-ratio: 9 / 16; }
+.area-video .video.alto { aspect-ratio: auto; height: 680px; max-height: 85vh; background: transparent; }

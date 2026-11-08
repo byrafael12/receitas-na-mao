@@ -1,5 +1,15 @@
 # Histórico de versões
 
+## Versão 17 (07/11/2026): foto em cada passo e vídeo na receita
+
+- **Foto em cada passo**: no formulário, cada passo tem **📷 Foto do passo** (ou **Trocar foto** e **Sem foto**). Na revisão da IA, a lista mostra os prints e os quadros do vídeo enviados, e **Do aparelho…**; na edição, abre direto as fotos do aparelho. A foto é reduzida para até 80 KB e aparece abaixo do passo na receita (tocar risca o passo, como o texto). Até 30 fotos por receita.
+- **IA sugere as fotos**: ao importar com prints ou vídeo, a IA indica qual imagem mostra cada passo (a massa no ponto, a calda engrossando); cada imagem vai para no máximo um passo; na dúvida, nenhuma. Você confere e troca na revisão.
+- **Ver vídeo**: receita com fonte do YouTube, Instagram ou TikTok ganha o botão **▶ Ver vídeo** no modo de preparo, com o player oficial dentro do app (YouTube sem cookies). Nada é carregado antes do toque. Precisa de internet; se o autor não permitir assistir fora do Instagram/TikTok, use "abrir original".
+- Fotos dos passos ficam na cópia do aparelho (funcionam sem internet), entram no backup com fotos e voltam na restauração; excluir a receita apaga capa e fotos dos passos; foto trocada ou removida é apagada do armazenamento; se o salvamento falhar, as fotos enviadas naquela tentativa são apagadas.
+- Correções: Ajustes > "Atualizar cópia agora" não volta mais para Ajustes se você saiu da tela antes de terminar, e o botão volta a funcionar depois de um erro.
+- Script `supabase/11-foto-nos-passos.sql`. Função da IA atualizada (foto sugerida por passo).
+- Testes locais: versão 17 39 de 39, banco 12 de 12 (script 11) e scripts 08 a 10 com o 11, função 82 de 82, extensão 26 de 26, importação 47 de 47, cadastro 25 de 25, lista 30 de 30, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, áudio 7 de 7, service worker 5 de 5.
+
 ## Versão 16 (07/11/2026): receitas salvas no Instagram
 
 - **Extensão do Chrome** (pasta `extensao-chrome` do projeto, fora deste repositório): botão **🍳 Enviar para Receitas** nos posts e reels do instagram.com. Lê o post na tela do próprio usuário (legenda, autor e foto) e abre ou reaproveita a aba do app na **Nova receita**, que já manda ler com a IA. Um clique, um post; sem robô.

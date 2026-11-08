@@ -8,8 +8,10 @@
     Só scripts e estilos do próprio site; imagens do próprio site, de
     "blob:" (prévia da foto escolhida) e do Supabase; conexões só com o
     Supabase. Isso bloqueia código injetado (XSS) mesmo se algo escapar.
+    Versão 17: quadros (iframe) só dos players oficiais do YouTube (sem
+    cookies), do Instagram e do TikTok, para "Ver vídeo" na receita.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://dmvjlirobozpmkusnnez.supabase.co; media-src blob:; connect-src https://dmvjlirobozpmkusnnez.supabase.co wss://dmvjlirobozpmkusnnez.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://dmvjlirobozpmkusnnez.supabase.co; media-src blob:; connect-src https://dmvjlirobozpmkusnnez.supabase.co wss://dmvjlirobozpmkusnnez.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'; frame-src https://www.youtube-nocookie.com https://www.instagram.com https://www.tiktok.com">
   <meta name="referrer" content="no-referrer">
   <title>Receitas na mão</title>
   <link rel="manifest" href="manifest.webmanifest">

@@ -25,6 +25,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/08-grupos-no-preparo.sql` | Grupos (Massa, Recheio...) também no modo de preparo |
 | `supabase/09-compartilhar-leitura.sql` | Titular grava; amigos e família autorizados (tabela `leitores`) só leem |
 | `supabase/10-favoritas-e-categorias.sql` | Favorita não muda a data da receita; função `remover_categoria` (move receitas para Outras) |
+| `supabase/11-foto-nos-passos.sql` | Foto em cada passo do preparo (`passos.imagem_caminho`), até 30 por receita, só na pasta do próprio usuário |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que lê o link (site, YouTube, TikTok, Instagram) e envia link, legenda, imagens e áudio ao Gemini, devolvendo a receita |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
 
@@ -38,7 +39,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 - Links importados: a função só baixa endereços públicos (http/https, portas padrão, nada de rede interna, conferido a cada redirecionamento), com limite de tamanho e de tempo.
 - Sem internet: a cópia das receitas fica só no aparelho de quem está logado (IndexedDB) e é apagada ao tocar em Sair.
 - Todo texto de receita é exibido com `textContent`, nunca com `innerHTML` (proteção contra XSS). Links da fonte só `http` ou `https`.
-- CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe.
+- CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe. Quadros (iframe) só dos players oficiais do YouTube (sem cookies), do Instagram e do TikTok, carregados só ao tocar em "Ver vídeo", isolados (sandbox) e recebendo só a origem do app (versão 17).
 - Extensão do Chrome (versão 16, fica fora deste repositório, na pasta `extensao-chrome` do projeto): o app só aceita da extensão mensagens da própria página, com link do Instagram, legenda e foto conferidos.
 - O backup usa uma função que só lê e só responde a uma chave própria (guardada nas Propriedades do Apps Script); o banco guarda apenas o hash dela. A chave `service_role` não é usada.
 

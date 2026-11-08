@@ -22,11 +22,13 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '16';
+const VERSAO = '17';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
 const LIMITE_IMAGEM = 150 * 1024; // 150 KB
+const LIMITE_FOTO_PASSO = 80 * 1024; // 80 KB (versão 17: foto de cada passo, menor que a capa)
+const MAX_FOTOS_PASSOS = 30;
 const CATEGORIAS_INICIAIS = ['Massas', 'Carne de rês', 'Frango', 'Frutos do mar', 'Japonês e Chinês', 'Salgados',
   'Lanches', 'Sobremesas', 'Molhos', 'Acompanhamentos', 'Bebidas e Drinks', 'Outras'];
 
@@ -190,11 +192,11 @@ async function carregarImagem(arquivo) {
   });
 }
 
-/** Reduz a foto até caber em 150 KB (JPEG). */
-async function comprimirImagem(arquivo) {
+/** Reduz a foto até caber no limite (JPEG): capa até 150 KB; foto de passo até 80 KB. */
+async function comprimirImagem(arquivo, limite = LIMITE_IMAGEM, ladoInicial = 1280) {
   const img = await carregarImagem(arquivo);
   const larguraOriginal = img.width, alturaOriginal = img.height;
-  let lado = 1280, qualidade = 0.82;
+  let lado = ladoInicial, qualidade = 0.82;
   const canvas = document.createElement('canvas');
   for (let tentativa = 0; tentativa < 15; tentativa++) {
     const escala = Math.min(1, lado / Math.max(larguraOriginal, alturaOriginal));
@@ -203,11 +205,11 @@ async function comprimirImagem(arquivo) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', qualidade));
-    if (blob && blob.size <= LIMITE_IMAGEM) return blob;
+    if (blob && blob.size <= limite) return blob;
     if (qualidade > 0.6) qualidade -= 0.08;
     else lado = Math.round(lado * 0.85);
   }
-  throw new Error('Não consegui reduzir a imagem para 150 KB.');
+  throw new Error(`Não consegui reduzir a imagem para ${Math.round(limite / 1024)} KB.`);
 }
 
 /** Gera links temporários (1 hora) para imagens da pasta privada. */
@@ -336,12 +338,17 @@ async function atualizarColecao() {
   return colecao;
 }
 
+/** Todas as fotos em uso: capas e fotos dos passos (versão 17). */
+function caminhosDaColecao(c) {
+  return new Set([...c.receitas.map(r => r.imagem_caminho), ...(c.passos || []).map(p => p.imagem_caminho)].filter(Boolean));
+}
+
 let baixandoCapas = null;
 /** Guarda no aparelho as fotos que ainda não estão lá e apaga as que não são mais usadas. */
 function baixarCapas(colecao) {
   if (baixandoCapas) return baixandoCapas;
   baixandoCapas = (async () => {
-    const usadas = new Set(colecao.receitas.map(r => r.imagem_caminho).filter(Boolean));
+    const usadas = caminhosDaColecao(colecao);
     const guardadas = new Set(await chavesLocal('capas'));
     for (const c of guardadas) {
       if (!usadas.has(c)) {
@@ -607,12 +614,67 @@ async function telaLista() {
   desenhar();
 }
 
+// ---------------------------------------------------------------------
+// Vídeo original dentro da receita (versão 17). Só YouTube, Instagram e
+// TikTok, pelo player oficial de cada um. O player só carrega quando você
+// toca em "Ver vídeo" (antes disso, nada é pedido ao Google ou à Meta).
+// O vídeo não fica guardado no app: precisa de internet e do post no ar.
+// ---------------------------------------------------------------------
+function videoIncorporavel(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  const id = (v) => (v && /^[\w-]{6,20}$/.test(v)) ? v : null;
+  if (host === 'youtu.be' || host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    const curto = u.pathname.match(/^\/shorts\/([\w-]+)/);
+    const v = id(host === 'youtu.be' ? u.pathname.split('/')[1]
+      : u.searchParams.get('v') || (curto || u.pathname.match(/^\/(?:embed|live)\/([\w-]+)/))?.[1]);
+    return v ? { origem: 'YouTube', vertical: !!curto, src: `https://www.youtube-nocookie.com/embed/${v}?rel=0&playsinline=1` } : null;
+  }
+  if (host === 'instagram.com' || host === 'instagr.am') {
+    const m = u.pathname.match(/^\/(?:[\w.]+\/)?(?:p|reels?|tv)\/([\w-]+)/);
+    return m && id(m[1]) ? { origem: 'Instagram', vertical: true, alto: true, src: `https://www.instagram.com/p/${m[1]}/embed/` } : null;
+  }
+  if (host === 'tiktok.com') {
+    const m = u.pathname.match(/\/video\/(\d{8,25})/);
+    return m ? { origem: 'TikTok', vertical: true, alto: true, src: `https://www.tiktok.com/embed/v2/${m[1]}` } : null;
+  }
+  return null;
+}
+
+function blocoVideo(fonteUrl) {
+  const video = videoIncorporavel(fonteUrl);
+  if (!video) return null;
+  const area = el('div', { class: 'area-video' });
+  const botao = el('button', { class: 'botao', type: 'button', 'aria-expanded': 'false' }, `▶ Ver vídeo (${video.origem})`);
+  botao.addEventListener('click', () => {
+    if (area.firstChild) { area.replaceChildren(); botao.textContent = `▶ Ver vídeo (${video.origem})`; botao.setAttribute('aria-expanded', 'false'); return; }
+    if (estado.semConexao || !navigator.onLine) { area.replaceChildren(el('p', { class: 'status erro', text: 'O vídeo precisa de internet.' })); return; }
+    const quadro = el('iframe', {
+      class: 'video' + (video.vertical ? ' vertical' : '') + (video.alto ? ' alto' : ''),
+      src: video.src, title: `Vídeo da receita (${video.origem})`, loading: 'lazy',
+      allow: 'encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '',
+      // O app não manda o endereço para outros sites (meta referrer), mas o
+      // player do YouTube exige saber de qual site vem (erro 153 sem isso):
+      // vai só a origem (byrafael12.github.io), nunca a página.
+      referrerpolicy: 'strict-origin-when-cross-origin',
+      sandbox: 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox'
+    });
+    area.replaceChildren(...[quadro,
+      video.origem === 'YouTube' ? null : el('p', { class: 'ajuda', text: 'Se o vídeo não aparecer, o autor não permite assistir fora do ' + video.origem + ': use "abrir original" no fim da receita.' })].filter(Boolean));
+    botao.textContent = '✕ Fechar vídeo';
+    botao.setAttribute('aria-expanded', 'true');
+  });
+  return el('div', { class: 'bloco-video' }, botao, area);
+}
+
 async function telaReceita(id) {
   mensagem('Carregando…');
   let r;
   try { r = await buscarReceitaCompleta(id); } catch (e) { return mensagem(erroAmigavel(e), 'erro'); }
   if (!r) return mensagem('Receita não encontrada.', 'erro');
-  const urls = await urlsDasImagens([r.imagem_caminho]);
+  const urls = await urlsDasImagens([r.imagem_caminho, ...r.passos.map(p => p.imagem_caminho)]);
 
   const resumo = [
     nomeCategoria(r.categoria_id),
@@ -735,7 +797,8 @@ async function telaReceita(id) {
     (r.utensilios || []).length ? el('h2', { text: 'Utensílios' }) : null,
     (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
     el('h2', { text: 'Modo de preparo' }),
-    r.passos.length ? passosAgrupados(r.passos) : el('p', { class: 'aviso', text: 'Sem passos.' }),
+    blocoVideo(r.fonte_url),
+    r.passos.length ? passosAgrupados(r.passos, urls) : el('p', { class: 'aviso', text: 'Sem passos.' }),
     r.observacoes ? el('h2', { text: 'Observações' }) : null,
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
@@ -853,7 +916,8 @@ async function excluirReceita(r) {
   if (!confirm(`Excluir "${r.titulo}"? Não dá para desfazer.`)) return;
   const { error } = await sb.from('receitas').delete().eq('id', r.id);
   if (error) return alert(erroAmigavel(error));
-  if (r.imagem_caminho) await sb.storage.from(PASTA_IMAGENS).remove([r.imagem_caminho]);
+  const fotos = [r.imagem_caminho, ...(r.passos || []).map(p => p.imagem_caminho)].filter(Boolean);
+  if (fotos.length) await sb.storage.from(PASTA_IMAGENS).remove(fotos);
   try { await atualizarColecao(); } catch { estado.colecao = null; }
   location.hash = '#/';
 }
@@ -992,11 +1056,50 @@ async function telaFormulario(id, revisao = null) {
   function renumerar() {
     [...listaPassos.querySelectorAll('.numero-passo')].forEach((n, i) => { n.textContent = `${i + 1}.`; });
   }
-  function linhaPasso(texto = '') {
-    const linha = el('div', { class: 'linha-passo', 'data-tipo': 'passo' },
+  // Foto do passo (versão 17): quadro do vídeo, print (na revisão) ou foto do aparelho.
+  // linha._foto = { caminho } (já salva), { blob } (nova) ou null.
+  const candidatosPasso = revisao?.candidatos || [];
+  function controleFotoPasso(linha, inicial) {
+    linha._foto = inicial || null;
+    const miniatura = el('div', { class: 'foto-passo-mini', hidden: true });
+    const entrada = el('input', { type: 'file', accept: 'image/*', hidden: true, 'aria-label': 'Foto do passo do aparelho' });
+    const escolha = el('div', { class: 'candidatos candidatos-passo', hidden: true });
+    const botaoFoto = el('button', { class: 'botao pequeno', type: 'button' });
+    const botaoTirar = el('button', { class: 'botao pequeno', type: 'button', hidden: true }, 'Sem foto');
+    async function desenhar() {
+      let url = null;
+      if (linha._foto?.blob) { linha._foto.url ||= URL.createObjectURL(linha._foto.blob); url = linha._foto.url; }
+      else if (linha._foto?.caminho) url = (await urlsDasImagens([linha._foto.caminho]))[linha._foto.caminho] || null;
+      miniatura.replaceChildren(url ? el('img', { src: url, alt: 'Foto do passo' }) : '');
+      miniatura.hidden = !url;
+      botaoFoto.textContent = url ? '📷 Trocar foto' : '📷 Foto do passo';
+      botaoTirar.hidden = !url;
+    }
+    const usar = (foto) => { linha._foto = foto; escolha.hidden = true; desenhar(); };
+    // A lista de imagens só é montada quando aberta (vídeo com 30 quadros x muitos passos).
+    function montarEscolha() {
+      if (escolha.childElementCount) return;
+      candidatosPasso.forEach((c, i) => escolha.append(el('button', { class: 'candidato', type: 'button',
+        'aria-label': `Usar imagem ${i + 1} neste passo`, onclick: () => usar({ blob: c.blob }) }, el('img', { src: c.url, alt: '' }))));
+      escolha.append(el('button', { class: 'botao pequeno', type: 'button', onclick: () => entrada.click() }, 'Do aparelho…'));
+    }
+    botaoFoto.addEventListener('click', () => {
+      if (!candidatosPasso.length) return entrada.click();
+      montarEscolha();
+      escolha.hidden = !escolha.hidden;
+    });
+    entrada.addEventListener('change', () => { if (entrada.files[0]) usar({ blob: entrada.files[0] }); entrada.value = ''; });
+    botaoTirar.addEventListener('click', () => usar(null));
+    desenhar();
+    return el('div', { class: 'controle-foto-passo' }, miniatura, el('div', { class: 'acoes' }, botaoFoto, botaoTirar, entrada), escolha);
+  }
+  function linhaPasso(texto = '', foto = null) {
+    const linha = el('div', { class: 'linha-passo', 'data-tipo': 'passo' });
+    linha.append(
       el('span', { class: 'numero-passo' }),
       el('textarea', { maxlength: 2000, 'aria-label': 'Passo', placeholder: 'Descreva o passo' }, texto),
-      el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover passo', onclick: () => { linha.remove(); renumerar(); } }, '×'));
+      el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover passo', onclick: () => { linha.remove(); renumerar(); } }, '×'),
+      controleFotoPasso(linha, foto));
     return linha;
   }
   function linhaGrupoPasso(nome = '') {
@@ -1009,7 +1112,7 @@ async function telaFormulario(id, revisao = null) {
   let grupoPasso = null;
   for (const p of r?.passos || []) {
     if ((p.grupo || null) !== grupoPasso) { grupoPasso = p.grupo || null; if (grupoPasso) listaPassos.append(linhaGrupoPasso(grupoPasso)); }
-    listaPassos.append(linhaPasso(p.texto));
+    listaPassos.append(linhaPasso(p.texto, p.imagem_caminho ? { caminho: p.imagem_caminho } : (p.foto || null)));
   }
   if (!r?.passos?.length) listaPassos.append(linhaPasso(), linhaPasso());
   renumerar();
@@ -1048,9 +1151,10 @@ async function telaFormulario(id, revisao = null) {
     for (const linha of listaPassos.children) {
       if (linha.dataset.tipo === 'grupo') { grupoDoPasso = linha.querySelector('input').value.trim() || null; continue; }
       const texto = linha.querySelector('textarea').value.trim();
-      if (texto) passos.push({ grupo: grupoDoPasso, texto });
+      if (texto) passos.push({ grupo: grupoDoPasso, texto, foto: linha._foto || null });
     }
     if (passos.length > 60) erros.push('Máximo de 60 passos.');
+    if (passos.filter(p => p.foto).length > MAX_FOTOS_PASSOS) erros.push(`Máximo de ${MAX_FOTOS_PASSOS} fotos nos passos.`);
     const utensilios = [...listaUtensilios.querySelectorAll('input')].map(i => i.value.trim()).filter(Boolean);
     if (utensilios.length > 30) erros.push('Máximo de 30 utensílios.');
     const listaEtiquetas = etiquetas.value.split(',').map(t => t.trim()).filter(Boolean).slice(0, 15);
@@ -1059,6 +1163,7 @@ async function telaFormulario(id, revisao = null) {
     if (erros.length) { status.className = 'status erro'; status.textContent = erros.join(' '); return; }
 
     botaoSalvar.disabled = true;
+    const enviadas = []; // fotos enviadas agora: apagadas se o salvamento falhar
     try {
       let caminhoImagem = removerFoto ? null : (r?.imagem_caminho || null);
       const caminhoAntigo = r?.imagem_caminho || null;
@@ -1067,7 +1172,20 @@ async function telaFormulario(id, revisao = null) {
         caminhoImagem = `${estado.usuario.id}/${idReceita}-${Date.now()}.jpg`;
         const envio = await sb.storage.from(PASTA_IMAGENS).upload(caminhoImagem, fotoNova, { contentType: 'image/jpeg', upsert: false });
         if (envio.error) throw envio.error;
+        enviadas.push(caminhoImagem);
       }
+      // Fotos dos passos: reduz e envia só as novas; as já salvas seguem com o mesmo caminho.
+      const novasDosPassos = passos.filter(p => p.foto?.blob);
+      for (const [n, p] of novasDosPassos.entries()) {
+        status.textContent = `Enviando fotos dos passos: ${n + 1} de ${novasDosPassos.length}…`;
+        const blob = await comprimirImagem(p.foto.blob, LIMITE_FOTO_PASSO, 720);
+        const caminho = `${estado.usuario.id}/passos/${idReceita}-${Date.now()}-${n + 1}.jpg`;
+        const envio = await sb.storage.from(PASTA_IMAGENS).upload(caminho, blob, { contentType: 'image/jpeg', upsert: false });
+        if (envio.error) throw envio.error;
+        enviadas.push(caminho);
+        p.foto = { caminho };
+      }
+      const passosSalvos = passos.map(p => ({ grupo: p.grupo, texto: p.texto, imagem_caminho: p.foto?.caminho || null }));
       status.textContent = 'Salvando…';
       const { error } = await sb.rpc('salvar_receita', {
         dados: {
@@ -1080,22 +1198,25 @@ async function telaFormulario(id, revisao = null) {
           fonte_autor: fonteAutor.value.trim() || null,
           fonte_tipo: r?.fonte_tipo || 'manual',
           favorita: r?.favorita || false,
-          ingredientes, passos, etiquetas: listaEtiquetas,
+          ingredientes, passos: passosSalvos, etiquetas: listaEtiquetas,
           utensilios, observacoes: observacoes.value.trim() || null
         }
       });
-      if (error) {
-        if (fotoNova && caminhoImagem) await sb.storage.from(PASTA_IMAGENS).remove([caminhoImagem]);
-        throw error;
-      }
-      // Foto antiga substituída ou removida: apaga do armazenamento.
-      if (caminhoAntigo && caminhoAntigo !== caminhoImagem) await sb.storage.from(PASTA_IMAGENS).remove([caminhoAntigo]);
+      if (error) throw error;
+      enviadas.length = 0;
+      // Fotos antigas substituídas ou removidas (capa e passos): apaga do armazenamento.
+      const usadasAgora = new Set([caminhoImagem, ...passosSalvos.map(p => p.imagem_caminho)].filter(Boolean));
+      const antigas = [caminhoAntigo, ...(r?.passos || []).map(p => p.imagem_caminho)].filter(c => c && !usadasAgora.has(c));
+      if (antigas.length) await sb.storage.from(PASTA_IMAGENS).remove(antigas);
+      document.querySelectorAll('.linha-passo').forEach(l => { if (l._foto?.url) URL.revokeObjectURL(l._foto.url); });
       if (urlPrevia) URL.revokeObjectURL(urlPrevia);
       status.textContent = 'Atualizando a cópia no aparelho…';
       try { await atualizarColecao(); } catch { estado.colecao = null; /* a lista baixa de novo */ }
       if (revisao) revisao.aoSalvar(idReceita);
       else location.hash = `#/receita/${idReceita}`;
     } catch (e) {
+      if (enviadas.length) { try { await sb.storage.from(PASTA_IMAGENS).remove(enviadas); } catch { /* fica órfã, sem dano */ } }
+      // As fotos dos passos continuam na tela: é só tocar em Salvar de novo.
       status.className = 'status erro';
       status.textContent = 'Não salvou: ' + erroAmigavel(e);
       botaoSalvar.disabled = false;
@@ -1193,18 +1314,22 @@ function esperarEvento(alvo, evento, msTempo, mensagemErro) {
 }
 
 /** Lê a duração e tira quadros do vídeo (até 30, espalhados). */
-/** Passos em blocos por grupo (Massa, Recheio...), com numeração corrida. */
-function passosAgrupados(passos) {
+/** Passos em blocos por grupo (Massa, Recheio...), com numeração corrida e foto do passo (versão 17). */
+function passosAgrupados(passos, urls = {}) {
   const blocos = [];
   for (const p of passos) {
     const g = p.grupo || null;
     if (!blocos.length || blocos.at(-1).grupo !== g) blocos.push({ grupo: g, itens: [] });
-    blocos.at(-1).itens.push(p.texto);
+    blocos.at(-1).itens.push(p);
   }
   let numero = 1;
   return el('div', {}, blocos.map(b => {
-    const lista = el('ol', { class: 'passos', start: numero }, b.itens.map(t =>
-      el('li', { class: 'marcavel', text: t, onclick: (ev) => ev.currentTarget.classList.toggle('feito') })));
+    const lista = el('ol', { class: 'passos', start: numero }, b.itens.map(p => {
+      const url = p.imagem_caminho ? urls[p.imagem_caminho] : null;
+      return el('li', { class: 'marcavel', onclick: (ev) => ev.currentTarget.classList.toggle('feito') },
+        el('span', { class: 'texto-passo', text: p.texto }),
+        url ? el('img', { class: 'foto-passo', src: url, alt: `Foto do passo: ${p.texto.slice(0, 80)}`, loading: 'lazy' }) : null);
+    }));
     numero += b.itens.length;
     return el('div', {}, b.grupo ? el('div', { class: 'grupo-titulo', text: b.grupo }) : null, lista);
   }));
@@ -1712,7 +1837,11 @@ async function telaRevisao() {
       titulo: rec.titulo, categoria_id: catId, etiquetas: rec.etiquetas, porcoes: rec.porcoes,
       tempo_preparo_min: rec.tempo_preparo_min, tempo_total_min: rec.tempo_total_min,
       ingredientes: rec.ingredientes.map(i => ({ ...i, nome: i.observacao ? `${i.nome} (${i.observacao})` : i.nome })),
-      passos: rec.passos.map(p => typeof p === 'string' ? { grupo: null, texto: p } : { grupo: p.grupo || null, texto: p.texto }), utensilios: rec.utensilios, observacoes: rec.observacoes,
+      // Foto do passo sugerida pela IA (versão 17): o número da imagem enviada (prints, depois quadros do vídeo).
+      passos: rec.passos.map(p => typeof p === 'string' ? { grupo: null, texto: p } : {
+        grupo: p.grupo || null, texto: p.texto,
+        foto: Number.isInteger(p.indice_imagem) && imp.candidatos[p.indice_imagem - 1] && !imp.candidatos[p.indice_imagem - 1].doLink
+          ? { blob: imp.candidatos[p.indice_imagem - 1].blob } : null }), utensilios: rec.utensilios, observacoes: rec.observacoes,
       fonte_url: imp.link, fonte_autor: rec.autor || imp.autorLink, fonte_tipo: imp.fonteTipo
     },
     candidatos: imp.candidatos, capaIndice: capa,
@@ -1748,9 +1877,11 @@ async function telaAjustes() {
       el('button', {
         class: 'botao', type: 'button', disabled: estado.semConexao,
         onclick: async (ev) => {
-          ev.currentTarget.disabled = true; status.textContent = 'Atualizando…';
-          try { await atualizarColecao(); await baixarCapas(estado.colecao); telaAjustes(); }
-          catch (e) { status.textContent = erroAmigavel(e); ev.currentTarget.disabled = false; }
+          const botao = ev.currentTarget; // depois de um await, ev.currentTarget já é null
+          botao.disabled = true; status.textContent = 'Atualizando…';
+          // Só redesenha os Ajustes se o usuário ainda estiver neles.
+          try { await atualizarColecao(); await baixarCapas(estado.colecao); if (location.hash === '#/ajustes') telaAjustes(); }
+          catch (e) { status.textContent = erroAmigavel(e); botao.disabled = false; }
         }
       }, 'Atualizar cópia agora'),
       el('button', {
@@ -1832,7 +1963,7 @@ async function exportarBackup(comFotos, aoProgredir) {
   const fotos = {};
   if (comFotos) {
     if (!estado.semConexao) { aoProgredir?.('Conferindo as fotos…'); await baixarCapas(c); }
-    const caminhos = [...new Set(c.receitas.map(r => r.imagem_caminho).filter(Boolean))];
+    const caminhos = [...caminhosDaColecao(c)];
     for (const [n, caminho] of caminhos.entries()) {
       aoProgredir?.(`Juntando fotos: ${n + 1} de ${caminhos.length}`);
       const blob = await lerLocal('capas', caminho);
@@ -1898,23 +2029,28 @@ async function executarRestauracao(plano, aoProgredir) {
   }
   const nomeEtiqueta = new Map(plano.etiquetas.map(e => [e.id, e.nome]));
   const porOrdem = (a, b) => (a.ordem || 0) - (b.ordem || 0);
+  async function fotoRestaurada(original, caminhoNovo) {
+    if (!original) return null;
+    if (String(original).startsWith(`${uid}/`)) {
+      const existe = await sb.storage.from(PASTA_IMAGENS).download(original);
+      if (!existe.error && existe.data) return original;
+    }
+    const blob = plano.fotos[original] ? dataUrlParaBlob(plano.fotos[original]) : null;
+    if (!blob || blob.size > LIMITE_IMAGEM * 1.1) return null;
+    const envio = await sb.storage.from(PASTA_IMAGENS).upload(caminhoNovo, blob, { contentType: blob.type, upsert: false });
+    return envio.error ? null : caminhoNovo;
+  }
   let ok = 0; const falhas = [];
   for (const [n, r] of plano.novas.entries()) {
     aoProgredir?.(`Restaurando ${n + 1} de ${plano.novas.length}: ${r.titulo}`);
     try {
-      // Foto: a original, se ainda existe; senão, a do backup; senão, sem foto.
-      let foto = null;
-      if (r.imagem_caminho && String(r.imagem_caminho).startsWith(`${uid}/`)) {
-        const existe = await sb.storage.from(PASTA_IMAGENS).download(r.imagem_caminho);
-        if (!existe.error && existe.data) foto = r.imagem_caminho;
-      }
-      if (!foto && plano.fotos[r.imagem_caminho]) {
-        const blob = dataUrlParaBlob(plano.fotos[r.imagem_caminho]);
-        if (blob && blob.size <= LIMITE_IMAGEM * 1.1) {
-          const caminho = `${uid}/${r.id}-${Date.now()}.jpg`;
-          const envio = await sb.storage.from(PASTA_IMAGENS).upload(caminho, blob, { contentType: blob.type, upsert: false });
-          if (!envio.error) foto = caminho;
-        }
+      // Fotos (capa e passos): a original, se ainda existe; senão, a do backup; senão, sem foto.
+      const foto = await fotoRestaurada(r.imagem_caminho, `${uid}/${r.id}-${Date.now()}.jpg`);
+      const passosDaReceita = plano.passos.filter(x => x.receita_id === r.id).sort(porOrdem);
+      const passosRestaurados = [];
+      for (const [k, x] of passosDaReceita.entries()) {
+        passosRestaurados.push({ grupo: x.grupo || null, texto: x.texto,
+          imagem_caminho: await fotoRestaurada(x.imagem_caminho, `${uid}/passos/${r.id}-${Date.now()}-${k + 1}.jpg`) });
       }
       const nomeCat = nomeCatArquivo.get(r.categoria_id);
       const { error } = await sb.rpc('salvar_receita', { dados: {
@@ -1927,7 +2063,7 @@ async function executarRestauracao(plano, aoProgredir) {
         ingredientes: plano.ingredientes.filter(i => i.receita_id === r.id).sort(porOrdem).map(i => ({
           grupo: i.grupo || null, quantidade: i.quantidade ?? null, unidade: i.unidade || null, nome: i.nome,
           observacao: i.observacao || null, texto_original: i.texto_original || null })),
-        passos: plano.passos.filter(x => x.receita_id === r.id).sort(porOrdem).map(x => ({ grupo: x.grupo || null, texto: x.texto })),
+        passos: passosRestaurados,
         etiquetas: plano.receitaEtiquetas.filter(x => x.receita_id === r.id).map(x => nomeEtiqueta.get(x.etiqueta_id)).filter(Boolean)
       } });
       if (error) throw error;
