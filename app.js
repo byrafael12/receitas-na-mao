@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '17';
+const VERSAO = '18';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -56,7 +56,9 @@ const estado = {
   semConexao: false,        // true = mostrando a cópia, sem falar com o Supabase
   semSessao: false,         // true = sessão vencida; mostra a cópia e pede login
   titular: true,            // false = conta só de leitura (amigos e família, script 09)
-  urlsLocais: new Map()     // caminho da imagem -> endereço blob: da foto guardada
+  urlsLocais: new Map(),    // caminho da imagem -> endereço blob: da foto guardada
+  rolagemLista: 0,          // versão 18: posição da lista, para voltar ao mesmo lugar
+  formulario: null          // versão 18: formulário aberto { sujo, ehRevisao, guardar, hash }
 };
 
 const app = document.getElementById('app');
@@ -95,8 +97,17 @@ function linkSeguro(url) {
   } catch { return null; }
 }
 
+// Versão 18: a posição da lista é guardada enquanto ela está na tela e
+// devolvida ao voltar de uma receita (o navegador não cuida disso sozinho,
+// porque as telas são trocadas pelo próprio app).
+let listaNaTela = false;
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+window.addEventListener('scroll', () => { if (listaNaTela) estado.rolagemLista = window.scrollY; }, { passive: true });
+
 function mostrar(...filhos) {
-  app.replaceChildren(...filhos);
+  listaNaTela = false;
+  estado.formulario = null; // saiu do formulário (ver "Trabalho não salvo")
+  app.replaceChildren(...filhos.filter(f => f !== null && f !== undefined && f !== false));
   window.scrollTo(0, 0);
 }
 
@@ -315,7 +326,10 @@ function aplicarColecao(c) {
 }
 
 /** Baixa tudo do Supabase, guarda no aparelho e depois baixa as fotos que faltam. */
+let pedidoColecao = 0;         // só a leitura mais nova é aplicada (evita cópia velha por cima da nova)
+let ultimaSincronizacao = 0;   // hora da última leitura completa com sucesso
 async function atualizarColecao() {
+  const meuPedido = ++pedidoColecao;
   const [receitas, ingredientes, passos, categorias, etiquetas, receitaEtiquetas] = await Promise.all([
     lerTabelaInteira('receitas', '*'),
     lerTabelaInteira('ingredientes', '*'),
@@ -331,12 +345,89 @@ async function atualizarColecao() {
     receitas, ingredientes: ingredientes.sort(porOrdem), passos: passos.sort(porOrdem),
     categorias, etiquetas, receita_etiquetas: receitaEtiquetas
   };
-  aplicarColecao(colecao);
   estado.semConexao = false;
+  ultimaSincronizacao = Date.now();
+  // Outra leitura começou depois desta (ex.: salvou uma receita no meio): a mais nova decide.
+  if (meuPedido !== pedidoColecao) return estado.colecao || colecao;
+  aplicarColecao(colecao);
   await gravarLocal('dados', 'colecao', colecao);
   baixarCapas(colecao); // em segundo plano
+  mostrarFaixa();
   return colecao;
 }
+
+// ---------------------------------------------------------------------
+// Versão 18: abrir pela cópia do aparelho e sincronizar por trás.
+// Com a cópia guardada, a tela aparece na hora; a leitura do Supabase
+// corre em segundo plano e só redesenha se algo mudou de verdade.
+// ---------------------------------------------------------------------
+function assinaturaDaColecao() {
+  const c = estado.colecao;
+  if (!c) return '';
+  return JSON.stringify([estado.titular, c.receitas.map(r => [r.id, r.atualizada_em, r.favorita, r.categoria_id]),
+    c.categorias.map(x => [x.id, x.nome, x.ativa]), c.ingredientes.length, c.passos.length, c.receita_etiquetas.length]);
+}
+function assinaturaDaReceita(id) {
+  const c = estado.colecao;
+  if (!c) return '';
+  return JSON.stringify([c.receitas.find(r => r.id === id), c.ingredientes.filter(i => i.receita_id === id), c.passos.filter(p => p.receita_id === id),
+    c.receita_etiquetas.filter(x => x.receita_id === id)]);
+}
+const ROTAS_DE_EDICAO = /^#\/(nova|manual|editar|revisar|categorias)/;
+
+function mostrarSincronizando(ligado) {
+  let aviso = document.getElementById('sincronizando');
+  if (!ligado) { aviso?.remove(); return; }
+  if (!aviso) topo.querySelector('.marca')?.after(el('span', { id: 'sincronizando', class: 'sincronizando', role: 'status', text: 'Atualizando…' }));
+}
+
+let sincronizando = null;
+/** Lê papel (titular ou leitura) e a coleção sem travar a tela. "inicial": abertura do app. */
+function sincronizarPorTras(inicial = false) {
+  if (sincronizando) return sincronizando;
+  const antes = assinaturaDaColecao();
+  const idAberto = location.hash.startsWith('#/receita/') ? location.hash.split('/')[2] : null;
+  const receitaAntes = idAberto ? assinaturaDaReceita(idAberto) : '';
+  const titularAntes = estado.titular;
+  const avisar = setTimeout(() => mostrarSincronizando(true), 1500);
+  sincronizando = (async () => {
+    try {
+      await comLimite((async () => {
+        const papel = await sb.rpc('eh_titular');
+        if (papel.error && /Failed to fetch|NetworkError|Load failed/i.test(papel.error.message || '')) throw papel.error;
+        if (!papel.error) estado.titular = papel.data !== false;
+        if (!estado.colecao?.categorias?.length) await carregarCategorias(); // 1º acesso: cria as categorias
+        await atualizarColecao();
+      })(), 20000);
+      mostrarFaixa();
+      // Redesenha só o que mudou, e nunca por cima de um formulário.
+      const rota = location.hash;
+      if (estado.titular !== titularAntes) rotear();
+      else if (ROTAS_DE_EDICAO.test(rota)) { /* não mexe */ }
+      else if (rota.startsWith('#/receita/')) { if (idAberto && rota.split('/')[2] === idAberto && assinaturaDaReceita(idAberto) !== receitaAntes) rotear(); }
+      else if (/^#?\/?$/.test(rota) && assinaturaDaColecao() !== antes) rotear();
+    } catch {
+      // Abertura sem resposta, ou aparelho sem rede: segue com a cópia e avisa.
+      if (inicial || !navigator.onLine) { estado.semConexao = true; mostrarFaixa(); }
+    } finally {
+      clearTimeout(avisar);
+      mostrarSincronizando(false);
+      sincronizando = null;
+    }
+  })();
+  return sincronizando;
+}
+
+/** Voltou ao app (do segundo plano): busca novidades, no máximo a cada 5 minutos. */
+function voltouAoApp() {
+  if (document.visibilityState !== 'visible' || !estado.usuario || estado.semSessao || !estado.colecao) return;
+  if (ROTAS_DE_EDICAO.test(location.hash)) return; // nunca durante edição, revisão ou importação
+  if (estado.semConexao) { tentarReconectar(); return; }
+  if (Date.now() - ultimaSincronizacao < 5 * 60 * 1000) return;
+  sincronizarPorTras(false);
+}
+document.addEventListener('visibilitychange', voltouAoApp);
+window.addEventListener('pageshow', (ev) => { if (ev.persisted) voltouAoApp(); });
 
 /** Todas as fotos em uso: capas e fotos dos passos (versão 17). */
 function caminhosDaColecao(c) {
@@ -498,6 +589,7 @@ async function alternarFavorita(r) {
   const { error } = await sb.from('receitas').update({ favorita: nova }).eq('id', r.id);
   if (error) { alert(erroAmigavel(error)); return null; }
   r.favorita = nova;
+  pedidoColecao++; // uma leitura que começou antes desta mudança não pode desfazê-la
   const naCopia = estado.colecao?.receitas.find(x => x.id === r.id);
   if (naCopia) { naCopia.favorita = nova; await gravarLocal('dados', 'colecao', estado.colecao); }
   return nova;
@@ -509,8 +601,9 @@ function normalizar(t) {
 }
 
 async function telaLista() {
-  mensagem('Carregando receitas…');
+  const buscaTinhaFoco = document.activeElement?.classList?.contains('busca');
   if (!estado.colecao) {
+    mensagem('Carregando receitas…');
     try { await atualizarColecao(); } catch (e) { return mensagem(erroAmigavel(e), 'erro'); }
   }
   const c = estado.colecao;
@@ -610,8 +703,14 @@ async function telaLista() {
     barraAbas.querySelector('.ativa')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
-  mostrar(cabecalho, campoBusca, barraAbas, botoesVisao, area);
+  const posicao = estado.rolagemLista || 0;
+  mostrar(cabecalho, avisoRevisaoPendente(), campoBusca, barraAbas, botoesVisao, area);
   desenhar();
+  // Volta ao ponto em que a lista estava (versão 18).
+  window.scrollTo(0, posicao);
+  estado.rolagemLista = posicao;
+  listaNaTela = true;
+  if (buscaTinhaFoco) campoBusca.focus({ preventScroll: true });
 }
 
 // ---------------------------------------------------------------------
@@ -945,6 +1044,7 @@ async function telaFormulario(id, revisao = null) {
   let fotoNova = null;          // Blob comprimido
   let removerFoto = false;
   let urlPrevia = null;
+  let aoMudar = () => {};       // versão 18: avisa que o formulário mudou (definida no fim)
 
   const campo = (rotulo, entrada, ajuda) =>
     el('label', { class: 'campo' }, el('span', {}, rotulo, ajuda ? el('small', { text: ' ' + ajuda }) : null), entrada);
@@ -955,15 +1055,16 @@ async function telaFormulario(id, revisao = null) {
     estado.categorias.filter(c => c.ativa || c.id === r?.categoria_id)
       .map(c => el('option', { value: c.id, text: c.nome, selected: c.id === r?.categoria_id })));
   const etiquetas = el('input', { type: 'text', maxlength: 400, value: (r?.etiquetas || []).join(', '), placeholder: 'Airfryer, Rápida' });
-  const porcoes = el('input', { type: 'text', inputmode: 'decimal', value: r?.porcoes ? formatarNumero(r.porcoes) : '' });
-  const tempoPreparo = el('input', { type: 'text', inputmode: 'numeric', value: r?.tempo_preparo_min ?? '' });
-  const tempoTotal = el('input', { type: 'text', inputmode: 'numeric', value: r?.tempo_total_min ?? '' });
+  // (os campos "_texto" vêm do rascunho da revisão: o que estava digitado, mesmo se inválido)
+  const porcoes = el('input', { type: 'text', inputmode: 'decimal', value: r?.porcoes_texto ?? (r?.porcoes ? formatarNumero(r.porcoes) : '') });
+  const tempoPreparo = el('input', { type: 'text', inputmode: 'numeric', value: r?.tempo_preparo_texto ?? r?.tempo_preparo_min ?? '' });
+  const tempoTotal = el('input', { type: 'text', inputmode: 'numeric', value: r?.tempo_total_texto ?? r?.tempo_total_min ?? '' });
   const fonteUrl = el('input', { type: 'url', maxlength: 2000, value: r?.fonte_url || '', placeholder: 'https://' });
   const fonteAutor = el('input', { type: 'text', maxlength: 120, value: r?.fonte_autor || '', placeholder: '@perfil ou nome' });
 
   // Foto
   const previa = el('div', { class: 'foto-previa' });
-  const entradaFoto = el('input', { type: 'file', accept: 'image/*' });
+  const entradaFoto = el('input', { type: 'file', accept: 'image/*', 'aria-label': 'Foto da receita (capa)' });
   const botaoRemoverFoto = el('button', { class: 'botao pequeno', type: 'button' }, 'Remover foto');
   const statusFoto = el('div', { class: 'status' });
   async function desenharPrevia() {
@@ -986,11 +1087,20 @@ async function telaFormulario(id, revisao = null) {
       statusFoto.textContent = erroAmigavel(e);
     }
     desenharPrevia();
+    aoMudar();
   }
   entradaFoto.addEventListener('change', () => { if (entradaFoto.files[0]) usarFoto(entradaFoto.files[0]); });
 
   // Revisão: miniaturas das imagens e quadros do vídeo para escolher a capa.
   const escolhaCapa = el('div', { class: 'candidatos' });
+  const capaGuardada = revisao?.capaGuardada; // rascunho: capa já escolhida (ou removida) antes de sair
+  if (capaGuardada?.blob instanceof Blob) {
+    fotoNova = capaGuardada.blob;
+    urlPrevia = URL.createObjectURL(fotoNova);
+    statusFoto.textContent = `Foto pronta: ${Math.round(fotoNova.size / 1024)} KB`;
+  } else if (capaGuardada?.removida) {
+    removerFoto = true;
+  }
   if (revisao?.candidatos?.length) {
     revisao.candidatos.forEach((c, i) => {
       escolhaCapa.append(el('button', {
@@ -1002,14 +1112,18 @@ async function telaFormulario(id, revisao = null) {
         }
       }, el('img', { src: c.url, alt: '' })));
     });
-    const inicial = Number.isInteger(revisao.capaIndice) ? revisao.capaIndice : 0;
-    const botaoInicial = escolhaCapa.children[Math.min(inicial, revisao.candidatos.length - 1)];
-    botaoInicial.classList.add('escolhido');
-    usarFoto(revisao.candidatos[Math.min(inicial, revisao.candidatos.length - 1)].blob);
+    if (!capaGuardada?.blob && !capaGuardada?.removida) {
+      const inicial = Number.isInteger(revisao.capaIndice) ? revisao.capaIndice : 0;
+      const botaoInicial = escolhaCapa.children[Math.min(inicial, revisao.candidatos.length - 1)];
+      botaoInicial.classList.add('escolhido');
+      usarFoto(revisao.candidatos[Math.min(inicial, revisao.candidatos.length - 1)].blob);
+    }
   }
   botaoRemoverFoto.addEventListener('click', () => {
     fotoNova = null; removerFoto = true; entradaFoto.value = ''; statusFoto.textContent = '';
+    escolhaCapa.querySelectorAll('.candidato').forEach(b => b.classList.remove('escolhido'));
     desenharPrevia();
+    aoMudar();
   });
 
   // Ingredientes: linhas de ingrediente e de grupo (ex.: "Recheio").
@@ -1017,7 +1131,7 @@ async function telaFormulario(id, revisao = null) {
   function linhaIngrediente(i = {}) {
     const linha = el('div', { class: 'linha-ingrediente', 'data-tipo': 'ing', 'data-original': i.texto_original || null },
       el('input', { type: 'text', inputmode: 'decimal', placeholder: 'Qtd', 'aria-label': 'Quantidade',
-        value: i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : '' }),
+        value: i.quantidade_texto ?? (i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : '') }),
       el('input', { type: 'text', placeholder: 'Unid.', maxlength: 30, 'aria-label': 'Unidade', value: i.unidade || '' }),
       el('input', { type: 'text', placeholder: 'Ingrediente', maxlength: 200, 'aria-label': 'Ingrediente', value: i.nome || '' }),
       el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover ingrediente', onclick: () => linha.remove() }, '×'));
@@ -1075,7 +1189,7 @@ async function telaFormulario(id, revisao = null) {
       botaoFoto.textContent = url ? '📷 Trocar foto' : '📷 Foto do passo';
       botaoTirar.hidden = !url;
     }
-    const usar = (foto) => { linha._foto = foto; escolha.hidden = true; desenhar(); };
+    const usar = (foto) => { linha._foto = foto; escolha.hidden = true; desenhar(); aoMudar(); };
     // A lista de imagens só é montada quando aberta (vídeo com 30 quadros x muitos passos).
     function montarEscolha() {
       if (escolha.childElementCount) return;
@@ -1116,6 +1230,43 @@ async function telaFormulario(id, revisao = null) {
   }
   if (!r?.passos?.length) listaPassos.append(linhaPasso(), linhaPasso());
   renumerar();
+
+  let tempoRascunho = null;
+  /** O que está na tela agora, sem validar (para o rascunho da revisão). */
+  function rascunhoDoFormulario() {
+    const ingredientes = [];
+    let g = null;
+    for (const linha of listaIngredientes.children) {
+      const c = linha.querySelectorAll('input');
+      if (linha.dataset.tipo === 'grupo') { g = c[0].value.trim() || null; continue; }
+      const qt = c[0].value.trim();
+      if (!c[2].value.trim() && !qt && !c[1].value.trim()) continue;
+      const q = lerQuantidade(qt);
+      ingredientes.push({ grupo: g, quantidade: Number.isNaN(q) ? null : q, quantidade_texto: qt, unidade: c[1].value, nome: c[2].value,
+        texto_original: linha.dataset.original || null });
+    }
+    const passos = [];
+    let gp = null;
+    for (const linha of listaPassos.children) {
+      if (linha.dataset.tipo === 'grupo') { gp = linha.querySelector('input').value.trim() || null; continue; }
+      const texto = linha.querySelector('textarea').value;
+      const nCandidato = linha._foto?.blob ? candidatosPasso.findIndex(c => c.blob === linha._foto.blob) : -1;
+      const foto = nCandidato >= 0 ? { candidato: nCandidato }
+        : linha._foto?.blob ? { blob: linha._foto.blob } : linha._foto?.caminho ? { caminho: linha._foto.caminho } : null;
+      if (texto.trim() || foto) passos.push({ grupo: gp, texto, foto });
+    }
+    return {
+      dados: {
+        titulo: titulo.value, categoria_id: categoria.value || null,
+        etiquetas: etiquetas.value.split(',').map(x => x.trim()).filter(Boolean),
+        porcoes_texto: porcoes.value, tempo_preparo_texto: tempoPreparo.value, tempo_total_texto: tempoTotal.value,
+        ingredientes, passos,
+        utensilios: [...listaUtensilios.querySelectorAll('input')].map(i => i.value).filter(x => x.trim()),
+        observacoes: observacoes.value, fonte_url: fonteUrl.value, fonte_autor: fonteAutor.value, fonte_tipo: r?.fonte_tipo || 'manual'
+      },
+      capa: { blob: fotoNova || null, removida: removerFoto }
+    };
+  }
 
   const status = el('div', { class: 'status', role: 'status' });
   const botaoSalvar = el('button', { class: 'botao principal', type: 'button' }, 'Salvar');
@@ -1212,6 +1363,8 @@ async function telaFormulario(id, revisao = null) {
       if (urlPrevia) URL.revokeObjectURL(urlPrevia);
       status.textContent = 'Atualizando a cópia no aparelho…';
       try { await atualizarColecao(); } catch { estado.colecao = null; /* a lista baixa de novo */ }
+      clearTimeout(tempoRascunho);
+      estado.formulario = null; // salvo: sair não pergunta nem guarda rascunho
       if (revisao) revisao.aoSalvar(idReceita);
       else location.hash = `#/receita/${idReceita}`;
     } catch (e) {
@@ -1228,7 +1381,7 @@ async function telaFormulario(id, revisao = null) {
     revisao.aviso ? el('p', { text: revisao.aviso }) : null,
     revisao.duvidosos?.length ? el('p', {}, 'Não encontrei com certeza: ', revisao.duvidosos.join('; ') + '.') : null,
     el('div', { class: 'acoes' },
-      el('button', { class: 'botao pequeno perigo', type: 'button', onclick: () => revisao.aoDescartar() },
+      el('button', { class: 'botao pequeno perigo', type: 'button', onclick: () => { clearTimeout(tempoRascunho); estado.formulario = null; revisao.aoDescartar(); } },
         revisao.total > 1 ? 'Descartar esta receita' : 'Descartar'))) : null;
 
   mostrar(el('section', {},
@@ -1267,6 +1420,24 @@ async function telaFormulario(id, revisao = null) {
     status
   ));
   desenharPrevia();
+
+  // Versão 18: acompanha as mudanças do formulário.
+  const meu = {
+    hash: location.hash, sujo: false, ehRevisao: !!revisao?.guardar,
+    guardar: () => { if (estado.formulario === meu && revisao?.guardar) revisao.guardar(rascunhoDoFormulario()); }
+  };
+  estado.formulario = meu;
+  aoMudar = () => {
+    if (estado.formulario !== meu) return;
+    if (!meu.ehRevisao) { meu.sujo = true; return; }
+    clearTimeout(tempoRascunho);
+    tempoRascunho = setTimeout(meu.guardar, 800); // guarda o rascunho pouco depois da última mudança
+  };
+  const secao = app.firstElementChild;
+  secao.addEventListener('input', aoMudar);
+  secao.addEventListener('change', aoMudar);
+  const observador = new MutationObserver(aoMudar); // linhas incluídas, removidas ou movidas
+  for (const lista of [listaIngredientes, listaUtensilios, listaPassos]) observador.observe(lista, { childList: true });
 }
 
 // ---------------------------------------------------------------------
@@ -1678,6 +1849,7 @@ function telaImportar() {
 
   botao.addEventListener('click', async () => {
     status.className = 'status';
+    if (revisaoPendente() && !confirm('Há uma revisão em andamento. Ler outra receita agora descarta a anterior. Continuar?')) return;
     const texto = legenda.value.trim();
     const imagens = [...entradaImagens.files].slice(0, MAX_PRINTS);
     const video = entradaVideo.files[0] || null;
@@ -1755,6 +1927,7 @@ function telaImportar() {
         } catch { /* sem a foto do link */ }
       }
 
+      await descartarRevisao(); // a leitura nova substitui uma revisão antiga, se havia
       estado.importacao = {
         receitas: json.receitas, candidatos, link: linkSeguro(json.link?.url || linkFonte) || null, importacaoId: json.importacao_id,
         fonteTipo: json.link ? json.link.tipo : linkSoFonte ? 'rede' : (video ? 'video' : (imagens.length ? 'print' : 'legenda')),
@@ -1762,6 +1935,7 @@ function telaImportar() {
         aviso: [json.aviso, ...avisos].filter(Boolean).join(' '),
         prints: imagens.length, indice: 0, ultimaSalva: null
       };
+      await guardarRascunho(); // versão 18: a leitura da IA não se perde se o app fechar
       location.hash = '#/revisar';
     } catch (e) {
       status.className = cancelado ? 'status' : 'status erro';
@@ -1778,6 +1952,7 @@ function telaImportar() {
   mostrar(el('section', {},
     el('p', {}, el('a', { href: '#/' }, '← Voltar')),
     el('h1', { text: 'Nova receita' }),
+    avisoRevisaoPendente(),
     el('p', { class: 'ajuda' }, 'A IA lê o link, a legenda, os prints e o vídeo e monta a receita para você revisar. ',
       el('a', { href: '#/manual' }, 'Prefere digitar? Cadastro manual')),
     el('label', { class: 'campo' }, el('span', {}, 'Link ', el('small', { text: 'site de receita e YouTube funcionam sozinhos; no Instagram, cole também a legenda' })), link, avisoRepetida),
@@ -1797,7 +1972,10 @@ function telaImportar() {
     autorExtensao = p.autor;
     if (p.imagem) { const dt = new DataTransfer(); dt.items.add(p.imagem); entradaImagens.files = dt.files; }
     atualizarResumo();
-    if (conferirRepetida()) {
+    if (revisaoPendente()) {
+      status.className = 'status erro';
+      status.textContent = 'Post recebido do Instagram. Termine ou descarte a revisão em andamento (acima) e toque em "Ler receita com IA".';
+    } else if (conferirRepetida()) {
       status.className = 'status erro';
       status.textContent = 'Post recebido do Instagram, mas você já tem esta receita (veja acima). Para ler de novo, toque em "Ler receita com IA".';
     } else if (p.legenda.trim().length >= 40) {
@@ -1825,15 +2003,25 @@ async function telaRevisao() {
   if (capa === null) { const i = imp.candidatos.findIndex(c => c.doLink); if (i >= 0) capa = i; }
   const proxima = () => {
     imp.indice++;
-    if (imp.indice < imp.receitas.length) telaRevisao();
+    imp.formulario = null; // o rascunho era da receita que acabou de ser salva ou descartada
+    if (imp.indice < imp.receitas.length) { guardarRascunho(); telaRevisao(); }
     else {
       imp.candidatos.forEach(c => URL.revokeObjectURL(c.url));
       estado.importacao = null;
+      guardarRascunho(); // apaga o rascunho
       location.hash = imp.ultimaSalva ? `#/receita/${imp.ultimaSalva}` : '#/';
     }
   };
   await telaFormulario(null, {
-    dados: {
+    // Versão 18: se havia correções guardadas (rascunho), a revisão continua delas.
+    capaGuardada: imp.formulario?.capa || null,
+    guardar: (rascunho) => { if (estado.importacao === imp) { imp.formulario = rascunho; guardarFormularioDoRascunho(); } },
+    dados: imp.formulario?.dados ? {
+      ...imp.formulario.dados,
+      // foto de passo escolhida entre as imagens enviadas: guardada pelo número, não pela imagem
+      passos: imp.formulario.dados.passos.map(p => ({ ...p,
+        foto: Number.isInteger(p.foto?.candidato) ? (imp.candidatos[p.foto.candidato] ? { blob: imp.candidatos[p.foto.candidato].blob } : null) : p.foto }))
+    } : {
       titulo: rec.titulo, categoria_id: catId, etiquetas: rec.etiquetas, porcoes: rec.porcoes,
       tempo_preparo_min: rec.tempo_preparo_min, tempo_total_min: rec.tempo_total_min,
       ingredientes: rec.ingredientes.map(i => ({ ...i, nome: i.observacao ? `${i.nome} (${i.observacao})` : i.nome })),
@@ -1906,7 +2094,92 @@ async function telaAjustes() {
 // Navegação (rotas pelo trecho depois do # no endereço)
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Versão 18: trabalho não salvo.
+//  - Edição e cadastro manual: sair com mudanças pede confirmação.
+//  - Revisão da IA: tudo o que foi lido e corrigido fica guardado no
+//    aparelho (rascunho) até Salvar ou Descartar; sobrevive a Voltar,
+//    a recarregar a página e ao iPhone fechar o app em segundo plano.
+// ---------------------------------------------------------------------
+const CHAVE_RASCUNHO = 'rascunho-importacao';
+const VALIDADE_RASCUNHO_MS = 7 * 24 * 60 * 60 * 1000;
+
+function revisaoPendente() {
+  const imp = estado.importacao;
+  return imp && imp.indice < imp.receitas.length ? imp : null;
+}
+const CHAVE_RASCUNHO_FORMULARIO = 'rascunho-formulario';
+/** Guarda a leitura da IA (com as imagens). Chamada ao ler e ao passar para a próxima receita. */
+async function guardarRascunho() {
+  const imp = revisaoPendente();
+  if (!imp || !estado.usuario) {
+    await apagarLocal('dados', CHAVE_RASCUNHO);
+    await apagarLocal('dados', CHAVE_RASCUNHO_FORMULARIO);
+    return;
+  }
+  await gravarLocal('dados', CHAVE_RASCUNHO, {
+    ...imp, formulario: null, candidatos: imp.candidatos.map(c => ({ blob: c.blob, doLink: !!c.doLink })),
+    usuario_id: estado.usuario.id, guardado_em: Date.now()
+  });
+  await guardarFormularioDoRascunho();
+}
+/** Guarda só as correções digitadas (pequeno; as imagens grandes não são regravadas a cada mudança). */
+function guardarFormularioDoRascunho() {
+  const imp = revisaoPendente();
+  if (!imp?.formulario) return apagarLocal('dados', CHAVE_RASCUNHO_FORMULARIO);
+  return gravarLocal('dados', CHAVE_RASCUNHO_FORMULARIO, { indice: imp.indice, formulario: imp.formulario });
+}
+async function recuperarRascunho() {
+  if (estado.importacao || !estado.titular || !estado.usuario) return;
+  const r = await lerLocal('dados', CHAVE_RASCUNHO);
+  if (!r) return;
+  const valido = r.usuario_id === estado.usuario.id && Date.now() - r.guardado_em < VALIDADE_RASCUNHO_MS
+    && Array.isArray(r.receitas) && Array.isArray(r.candidatos) && Number.isInteger(r.indice) && r.indice < r.receitas.length
+    && r.candidatos.every(c => c && c.blob instanceof Blob);
+  if (!valido) { await apagarLocal('dados', CHAVE_RASCUNHO); await apagarLocal('dados', CHAVE_RASCUNHO_FORMULARIO); return; }
+  r.candidatos = r.candidatos.map(c => ({ ...c, url: URL.createObjectURL(c.blob) }));
+  const f = await lerLocal('dados', CHAVE_RASCUNHO_FORMULARIO);
+  r.formulario = f && f.indice === r.indice && f.formulario?.dados ? f.formulario : null;
+  estado.importacao = r;
+}
+function descartarRevisao() {
+  estado.importacao?.candidatos?.forEach(c => { try { URL.revokeObjectURL(c.url); } catch { /* já liberado */ } });
+  estado.importacao = null;
+  return guardarRascunho();
+}
+function avisoRevisaoPendente() {
+  const imp = revisaoPendente();
+  if (!imp || !estado.titular) return null;
+  const faltam = imp.receitas.length - imp.indice;
+  return el('div', { class: 'caixa-aviso revisao-pendente' },
+    el('strong', { text: 'Revisão em andamento' }),
+    el('p', { text: `${faltam === 1 ? 'Há 1 receita lida' : `Há ${faltam} receitas lidas`} pela IA e ainda não salva${faltam === 1 ? '' : 's'}: ${imp.receitas[imp.indice].titulo}.` }),
+    el('div', { class: 'acoes' },
+      el('a', { class: 'botao pequeno principal', href: '#/revisar' }, 'Continuar revisão'),
+      el('button', { class: 'botao pequeno perigo', type: 'button', onclick: async () => {
+        if (!confirm('Descartar a revisão em andamento? As receitas lidas e ainda não salvas serão perdidas.')) return;
+        await descartarRevisao();
+        rotear();
+      } }, 'Descartar')));
+}
+window.addEventListener('beforeunload', (ev) => {
+  const f = estado.formulario;
+  if (f?.ehRevisao) f.guardar();
+  else if (f?.sujo) { ev.preventDefault(); ev.returnValue = ''; }
+});
+// iPhone: ao ir para segundo plano o app pode ser fechado sem aviso; guarda a revisão antes.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && estado.formulario?.ehRevisao) estado.formulario.guardar(); });
+window.addEventListener('pagehide', () => { if (estado.formulario?.ehRevisao) estado.formulario.guardar(); });
+
 async function rotear() {
+  const aberto = estado.formulario;
+  if (aberto && aberto.hash !== location.hash) {
+    if (aberto.ehRevisao) aberto.guardar();
+    else if (aberto.sujo && !confirm('Sair sem salvar? As alterações desta receita serão perdidas.')) {
+      history.replaceState(null, '', aberto.hash); // fica onde estava
+      return;
+    }
+  }
   if (!estado.usuario) return telaLogin();
   topo.hidden = false;
   const rota = location.hash.replace(/^#/, '') || '/';
@@ -2300,8 +2573,19 @@ async function iniciar() {
     return telaLogin(erroLogin ? 'Não foi possível entrar com essa conta.' : null);
   }
   estado.usuario = sessao.user;
-  if (local && local.usuario_id === sessao.user.id) { aplicarColecao(local); estado.titular = local.titular !== false; }
+  const temCopia = !!(local && local.usuario_id === sessao.user.id);
+  if (temCopia) { aplicarColecao(local); estado.titular = local.titular !== false; }
   else if (local) await limparCopiaLocal(); // cópia de outra conta: apaga
+
+  if (temCopia) {
+    // Versão 18: com a cópia no aparelho, mostra a tela na hora e sincroniza por trás.
+    if (!navigator.onLine) estado.semConexao = true;
+    await recuperarRascunho();
+    mostrarFaixa();
+    await rotear();           // primeiro a tela (da cópia)…
+    sincronizarPorTras(true); // …depois a leitura do Supabase, sem disputar o processador
+    return;
+  }
 
   try {
     // Titular ou só leitura? Sem o script 09, a função não existe: segue como titular.
@@ -2313,6 +2597,7 @@ async function iniciar() {
     if (!estado.colecao) return mensagem(erroAmigavel(e), 'erro');
     estado.semConexao = true; // segue com a cópia guardada
   }
+  await recuperarRascunho();
   mostrarFaixa();
   rotear();
 }

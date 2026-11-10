@@ -1,5 +1,18 @@
 # Histórico de versões
 
+## Versão 18 (10/11/2026): pronto para 200+ receitas (auditoria de 10/11)
+
+- **Abre na hora (IMP-001)**: com a cópia no aparelho, a lista aparece na hora e a leitura do Supabase corre por trás. Se demorar mais de 1,5 s, aparece "Atualizando…" discreto ao lado do nome do app. Só redesenha se algo mudou de verdade, e nunca por cima de um formulário. Sem resposta da rede, mostra a faixa "Sem internet" como antes. Com rede de 4G simulada (0,3 s por consulta), abrir caiu de 2,6 s para 1,3 s; com rede travada, de 6,4 s para 0,4 s.
+- **Volta ao mesmo lugar da lista (IMP-002)**: abrir uma receita e voltar (gesto ou "← Voltar") devolve a lista à mesma posição, em grade e em lista, com busca e aba mantidas.
+- **Trabalho não salvo (IMP-003)**:
+  - Edição e cadastro manual: sair com alteração pergunta "Sair sem salvar?"; sem alteração, não pergunta. Vale para "← Cancelar", gesto Voltar e fechar a aba.
+  - Revisão da IA: tudo o que foi lido e corrigido (texto, quantidades, passos, fotos dos passos e capa) fica guardado no aparelho até Salvar ou Descartar. Sobrevive a Voltar/Avançar, a recarregar e ao iPhone fechar o app em segundo plano. A lista e a tela Nova mostram "Revisão em andamento" com **Continuar revisão** e **Descartar**. Ler outra receita com revisão pendente pergunta antes. Sair da conta apaga o rascunho.
+  - Extensão do Chrome: com revisão pendente, o post chega preenchido, mas não é lido sozinho.
+- **Atualiza ao voltar ao app (IMP-004)**: voltar do segundo plano depois de 5 minutos ou mais busca novidades (ex.: receita salva no notebook aparece no iPhone sem fechar o app). Nunca durante cadastro, edição, revisão ou importação.
+- **Acabamentos (IMP-010)**: contraste do contador da aba ativa; rótulo no campo de foto; botões, abas, "← Voltar" e o nome do app com pelo menos 44 px de toque; "Minhas receitas (300)" e "+ Nova" numa linha só; impressão da receita sem barras e botões, em fundo branco.
+- Sem SQL e sem mudança na função da IA ou no service worker.
+- Testes locais: versão 18 54 de 54, extensão 27 de 27, importação 47 de 47, cadastro 25 de 25, lista 30 de 30, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, versão 17 39 de 39, áudio 7 de 7.
+
 ## Versão 17 (07/11/2026): foto em cada passo e vídeo na receita
 
 - **Foto em cada passo**: no formulário, cada passo tem **📷 Foto do passo** (ou **Trocar foto** e **Sem foto**). Na revisão da IA, a lista mostra os prints e os quadros do vídeo enviados, e **Do aparelho…**; na edição, abre direto as fotos do aparelho. A foto é reduzida para até 80 KB e aparece abaixo do passo na receita (tocar risca o passo, como o texto). Até 30 fotos por receita.

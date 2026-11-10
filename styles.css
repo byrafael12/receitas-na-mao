@@ -52,7 +52,7 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 .marca { font-weight: 700; font-size: 1.1rem; color: var(--texto); text-decoration: none; }
 .botao-icone {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border-radius: 50%;
+  width: 44px; height: 44px; border-radius: 50%;
   color: var(--texto); text-decoration: none; font-size: 1.3rem;
 }
 
@@ -70,7 +70,7 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 }
 .botao.principal { background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); }
 .botao.perigo { color: var(--perigo); }
-.botao.pequeno { min-height: 36px; padding: 6px 12px; font-size: 0.9rem; }
+.botao.pequeno { min-height: 44px; padding: 6px 12px; font-size: 0.9rem; }
 .botao:disabled { opacity: 0.55; cursor: default; }
 .acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 
@@ -93,7 +93,7 @@ h2 { font-size: 1.15rem; margin-top: 24px; }
 /* Abas de categoria (rolam para o lado) */
 .abas { display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 10px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 .abas::-webkit-scrollbar { display: none; }
-.aba { flex: 0 0 auto; min-height: 36px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font: inherit; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.aba { flex: 0 0 auto; min-height: 44px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font: inherit; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
 .aba.ativa { background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); font-weight: 600; }
 .aba-qtd { opacity: 0.75; font-size: 0.8rem; }
 .alternar-visao { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 10px; }
@@ -146,13 +146,13 @@ input[type="text"], input[type="url"], input[type="number"], input[type="search"
 }
 textarea { min-height: 72px; resize: vertical; }
 .linha-campos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.linha-ingrediente { display: grid; grid-template-columns: 68px 78px minmax(0, 1fr) 40px; gap: 6px; margin-bottom: 8px; align-items: center; }
-.linha-grupo { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 6px; margin: 12px 0 8px; }
+.linha-ingrediente { display: grid; grid-template-columns: 64px 74px minmax(0, 1fr) 44px; gap: 6px; margin-bottom: 8px; align-items: center; }
+.linha-grupo { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 6px; margin: 12px 0 8px; }
 .linha-grupo input { font-weight: 700; }
-.linha-grupo.com-mover { grid-template-columns: minmax(0, 1fr) 40px 40px 40px; }
+.linha-grupo.com-mover { grid-template-columns: minmax(0, 1fr) 44px 44px 44px; }
 .linha-passo { display: grid; grid-template-columns: 28px minmax(0, 1fr) 40px; gap: 6px; margin-bottom: 8px; align-items: start; }
 .numero-passo { padding-top: 10px; font-weight: 700; color: var(--texto-suave); text-align: right; }
-.remover { min-height: 40px; width: 40px; padding: 0; border-radius: 10px; }
+.remover { min-height: 44px; width: 44px; padding: 0; border-radius: 10px; }
 .foto-previa { margin: 8px 0; }
 .foto-previa img { max-width: 100%; max-height: 240px; border-radius: 10px; display: block; }
 .status { min-height: 1.5em; margin-top: 12px; color: var(--texto-suave); }
@@ -187,8 +187,8 @@ input[type="file"] { max-width: 100%; }
 .porcoes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
 .porcoes .botao.pequeno { min-width: 44px; font-size: 1.1rem; }
 .porcoes-rotulo { font-weight: 600; }
-.porcoes-valor { min-width: 3em; min-height: 40px; padding: 4px 8px; text-align: center; font: inherit; font-weight: 700; font-size: 1.1rem; color: var(--texto); background: var(--superficie); border: 1px dashed var(--borda); border-radius: 8px; cursor: pointer; }
-.porcoes-campo { width: 4.5em !important; min-height: 40px !important; text-align: center; font-weight: 700; }
+.porcoes-valor { min-width: 3em; min-height: 44px; padding: 4px 8px; text-align: center; font: inherit; font-weight: 700; font-size: 1.1rem; color: var(--texto); background: var(--superficie); border: 1px dashed var(--borda); border-radius: 8px; cursor: pointer; }
+.porcoes-campo { width: 4.5em !important; min-height: 44px !important; text-align: center; font-weight: 700; }
 .porcoes-aviso { flex-basis: 100%; font-size: 0.8rem; color: var(--texto-suave); }
 .porcoes-aviso:empty { display: none; }
 .acoes-topo { margin-top: 8px; }
@@ -220,3 +220,32 @@ h3 { font-size: 1rem; margin: 18px 0 6px; }
 .area-video .video { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 10px; background: #000; }
 .area-video .video.vertical { max-width: 380px; aspect-ratio: 9 / 16; }
 .area-video .video.alto { aspect-ratio: auto; height: 680px; max-height: 85vh; background: transparent; }
+
+/* Versão 18: acabamentos (auditoria de 10/11/2026) */
+.aba.ativa .aba-qtd { opacity: 1; }                                   /* contraste do contador da aba ativa */
+.cabecalho-lista h1 { margin-bottom: 0; font-size: clamp(1.2rem, 5.2vw, 1.5rem); } /* "Minhas receitas (300)" numa linha no iPhone */
+.cabecalho-lista .botao { white-space: nowrap; flex: 0 0 auto; }      /* "+ Nova" numa linha só */
+.conteudo > p:first-child > a, .conteudo > section > p:first-child > a, .conteudo > article > p:first-child > a {
+  display: inline-flex; align-items: center; min-height: 44px;        /* "← Voltar" e "← Cancelar" fáceis de tocar */
+}
+input[type="file"] { font-size: 1rem; min-height: 44px; }
+.marca { display: inline-flex; align-items: center; min-height: 44px; }    /* "Receitas na mão" no topo: alvo de 44 px */
+input[type="checkbox"] { width: 24px; height: 24px; }
+.sincronizando { margin: 0 auto 0 10px; font-size: 0.8rem; color: var(--texto-suave); }
+.revisao-pendente .acoes { margin-top: 10px; }
+
+/* Impressão: só a receita, sem botões nem barras */
+@media print {
+  :root { --fundo: #fff; --superficie: #fff; --texto: #000; --texto-suave: #333; --borda: #bbb; color-scheme: light; }
+  body { font-size: 12pt; }
+  .topo, .faixa-offline, .acoes, .bloco-video, .porcoes .botao, .porcoes-aviso, .receita > p:first-child { display: none !important; }
+  .conteudo { max-width: none; padding: 0; }
+  .receita .capa { max-height: 7cm; width: auto; max-width: 100%; aspect-ratio: auto; }
+  .receita h1 { font-size: 20pt; }
+  .porcoes-valor { border: 0; min-height: 0; padding: 0; }
+  .ingredientes li, .passos li { break-inside: avoid; }
+  .passos .foto-passo { max-width: 6cm; max-height: 4.5cm; }
+  .feito { text-decoration: none; opacity: 1; }
+  a { color: #000; text-decoration: none; }
+  .fonte a::after { content: " (" attr(href) ")"; overflow-wrap: anywhere; }
+}
