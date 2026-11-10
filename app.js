@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '18';
+const VERSAO = '19';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -57,7 +57,9 @@ const estado = {
   semSessao: false,         // true = sessão vencida; mostra a cópia e pede login
   titular: true,            // false = conta só de leitura (amigos e família, script 09)
   urlsLocais: new Map(),    // caminho da imagem -> endereço blob: da foto guardada
-  rolagemLista: 0,          // versão 18: posição da lista, para voltar ao mesmo lugar
+  rolagem: {},              // versão 18/19: posição de cada lista (tela inicial e cada categoria), para voltar ao mesmo lugar
+  ultimaLista: '#/',        // versão 19: para onde "← Voltar" da receita leva
+  buscaLista: null,         // versão 19: { chave, texto } da busca da tela aberta
   formulario: null          // versão 18: formulário aberto { sujo, ehRevisao, guardar, hash }
 };
 
@@ -102,7 +104,7 @@ function linkSeguro(url) {
 // porque as telas são trocadas pelo próprio app).
 let listaNaTela = false;
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
-window.addEventListener('scroll', () => { if (listaNaTela) estado.rolagemLista = window.scrollY; }, { passive: true });
+window.addEventListener('scroll', () => { if (listaNaTela) estado.rolagem[listaNaTela] = window.scrollY; }, { passive: true });
 
 function mostrar(...filhos) {
   listaNaTela = false;
@@ -405,7 +407,7 @@ function sincronizarPorTras(inicial = false) {
       if (estado.titular !== titularAntes) rotear();
       else if (ROTAS_DE_EDICAO.test(rota)) { /* não mexe */ }
       else if (rota.startsWith('#/receita/')) { if (idAberto && rota.split('/')[2] === idAberto && assinaturaDaReceita(idAberto) !== receitaAntes) rotear(); }
-      else if (/^#?\/?$/.test(rota) && assinaturaDaColecao() !== antes) rotear();
+      else if (/^#(\/(categoria\/[\w-]+)?)?$/.test(rota) && assinaturaDaColecao() !== antes) rotear();
     } catch {
       // Abertura sem resposta, ou aparelho sem rede: segue com a cópia e avisa.
       if (inicial || !navigator.onLine) { estado.semConexao = true; mostrarFaixa(); }
@@ -600,7 +602,28 @@ function normalizar(t) {
   return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
-async function telaLista() {
+// ---------------------------------------------------------------------
+// Versão 19: tela inicial por categorias. Um quadro por categoria, com a
+// foto da receita mais recente e a quantidade; "Todas" e "★ Favoritas"
+// também viram quadros. Tocar abre a lista daquela categoria
+// (#/categoria/<id>). A busca da tela inicial procura em todas.
+// ---------------------------------------------------------------------
+const FILTROS_ESPECIAIS = { todas: 'Todas', favoritas: '★ Favoritas', sem: 'Sem categoria' };
+function nomeDoFiltro(filtro) {
+  return FILTROS_ESPECIAIS[filtro] || nomeCategoria(filtro) || 'Categoria';
+}
+function noFiltro(r, filtro) {
+  if (filtro === 'todas') return true;
+  if (filtro === 'favoritas') return ehFavorita(r);
+  if (filtro === 'sem') return !r.categoria_id;
+  return r.categoria_id === filtro;
+}
+/** Onde voltar da receita: a última lista vista (tela inicial ou uma categoria). */
+function hashDaUltimaLista() {
+  return /^#\/(categoria\/[\w-]+)?$/.test(estado.ultimaLista || '') ? estado.ultimaLista : '#/';
+}
+
+async function telaLista(filtro = null) {
   const buscaTinhaFoco = document.activeElement?.classList?.contains('busca');
   if (!estado.colecao) {
     mensagem('Carregando receitas…');
@@ -608,6 +631,8 @@ async function telaLista() {
   }
   const c = estado.colecao;
   const data = c.receitas;
+  const inicio = !filtro; // tela inicial (quadros) ou lista de uma categoria
+  if (filtro && !FILTROS_ESPECIAIS[filtro] && !estado.categorias.some(x => x.id === filtro)) { location.hash = '#/'; return; }
 
   // Texto de busca de cada receita: nome, ingredientes, etiquetas, utensílios e autor.
   const textoBusca = new Map(data.map(r => [r.id, [r.titulo, ...(r.utensilios || []), r.fonte_autor]]));
@@ -622,22 +647,28 @@ async function telaLista() {
     titulo,
     estado.titular ? el('a', { class: 'botao principal', href: '#/nova' }, '+ Nova') : null);
 
-  if (!data.length) {
+  if (!data.length && inicio) {
     titulo.textContent = 'Minhas receitas';
-    return mostrar(cabecalho, el('p', { class: 'aviso', text: estado.titular
+    return mostrar(cabecalho, avisoRevisaoPendente(), el('p', { class: 'aviso', text: estado.titular
       ? 'Nenhuma receita ainda. Toque em "+ Nova" para cadastrar a primeira.'
       : 'Ainda não há receitas compartilhadas com você. Peça ao dono do app para incluir o seu e-mail.' }));
   }
 
-  let filtro = lerPreferencia('categoria', 'todas');
+  // A busca da tela inicial e a de cada categoria são separadas.
+  const chaveBusca = inicio ? 'inicio' : filtro;
+  if (estado.buscaLista?.chave !== chaveBusca) estado.buscaLista = { chave: chaveBusca, texto: inicio ? (estado.busca || '') : '' };
   let visao = lerPreferencia('visao', 'grade');
   const campoBusca = el('input', {
-    type: 'search', class: 'busca', value: estado.busca || '', maxlength: 100, enterkeyhint: 'search',
-    placeholder: 'Buscar por nome, ingrediente, etiqueta…', 'aria-label': 'Buscar receitas'
+    type: 'search', class: 'busca', value: estado.buscaLista.texto, maxlength: 100, enterkeyhint: 'search',
+    placeholder: inicio ? 'Buscar em todas: nome, ingrediente, etiqueta…' : `Buscar em ${nomeDoFiltro(filtro).replace('★ ', '')}…`,
+    'aria-label': 'Buscar receitas'
   });
-  campoBusca.addEventListener('input', () => { estado.busca = campoBusca.value; desenhar(); });
+  campoBusca.addEventListener('input', () => {
+    estado.buscaLista.texto = campoBusca.value;
+    if (inicio) estado.busca = campoBusca.value;
+    desenhar();
+  });
 
-  const barraAbas = el('div', { class: 'abas', role: 'tablist', 'aria-label': 'Categorias' });
   const botoesVisao = el('div', { class: 'alternar-visao', role: 'group', 'aria-label': 'Visão' });
   const area = el('div');
 
@@ -657,35 +688,45 @@ async function telaLista() {
         info ? el('div', { class: 'cartao-info', text: info }) : null));
   }
 
+  /** Quadros da tela inicial: Todas, Favoritas (se houver), categorias e "Sem categoria" (se houver). */
+  function quadros() {
+    const lista = [{ id: 'todas' }];
+    if (data.some(ehFavorita)) lista.push({ id: 'favoritas' });
+    // Categorias com receitas primeiro (em ordem alfabética); as vazias vão para o fim.
+    const usadas = new Set(data.map(r => r.categoria_id));
+    for (const cat of estado.categorias) if (usadas.has(cat.id)) lista.push({ id: cat.id });
+    if (usadas.has(null) || usadas.has(undefined)) lista.push({ id: 'sem' });
+    for (const cat of estado.categorias) if (!usadas.has(cat.id) && cat.ativa) lista.push({ id: cat.id });
+    return el('div', { class: 'quadros' }, lista.map(({ id }) => {
+      const delas = data.filter(r => noFiltro(r, id)); // já vêm da mais recente para a mais antiga
+      const comFoto = delas.find(r => r.imagem_caminho && urls[r.imagem_caminho]);
+      const nome = nomeDoFiltro(id);
+      const qtd = delas.length;
+      return el('a', { class: 'quadro' + (qtd ? '' : ' vazio') + (comFoto ? '' : ' sem-foto') + (id === 'todas' || id === 'favoritas' ? ' especial' : ''),
+        href: `#/categoria/${id}`, 'aria-label': `${nome}: ${qtd} ${qtd === 1 ? 'receita' : 'receitas'}` },
+        comFoto ? el('img', { class: 'quadro-foto', src: urls[comFoto.imagem_caminho], alt: '', loading: 'lazy' })
+          : el('div', { class: 'quadro-foto quadro-sem-foto', 'aria-hidden': 'true', text: id === 'favoritas' ? '★' : '🍽' }),
+        el('div', { class: 'quadro-texto', 'aria-hidden': 'true' },
+          el('span', { class: 'quadro-nome', text: nome }),
+          el('span', { class: 'quadro-qtd', text: `${qtd} ${qtd === 1 ? 'receita' : 'receitas'}` })));
+    }));
+  }
+
   function desenhar() {
-    // 1) Busca: todas as palavras digitadas precisam aparecer (em qualquer campo).
-    const palavras = normalizar(estado.busca).split(/\s+/).filter(Boolean);
-    const achadas = palavras.length ? data.filter(r => palavras.every(p => textoBusca.get(r.id).includes(p))) : data;
+    // Busca: todas as palavras digitadas precisam aparecer (em qualquer campo).
+    const palavras = normalizar(estado.buscaLista.texto).split(/\s+/).filter(Boolean);
+    const daTela = inicio ? data : data.filter(r => noFiltro(r, filtro));
+    const visiveis = palavras.length ? daTela.filter(r => palavras.every(p => textoBusca.get(r.id).includes(p))) : daTela;
 
-    // 2) Abas: "Todas" + categorias com receitas no resultado, com a contagem.
-    const contagem = new Map();
-    for (const r of achadas) contagem.set(r.categoria_id || 'sem', (contagem.get(r.categoria_id || 'sem') || 0) + 1);
-    const abas = [{ id: 'todas', nome: 'Todas', qtd: achadas.length }];
-    const qtdFavoritas = achadas.filter(ehFavorita).length;
-    if (qtdFavoritas || (filtro === 'favoritas' && palavras.length)) abas.push({ id: 'favoritas', nome: '★ Favoritas', qtd: qtdFavoritas });
-    for (const c of estado.categorias) {
-      if (contagem.has(c.id) || c.id === filtro) abas.push({ id: c.id, nome: c.nome, qtd: contagem.get(c.id) || 0 });
+    if (inicio && !palavras.length) {
+      titulo.textContent = `Minhas receitas (${data.length})`;
+      botoesVisao.hidden = true;
+      area.replaceChildren(quadros());
+      return;
     }
-    if (contagem.has('sem') || filtro === 'sem') abas.push({ id: 'sem', nome: 'Sem categoria', qtd: contagem.get('sem') || 0 });
-    if (!abas.some(a => a.id === filtro)) filtro = 'todas';
-
-    // 3) Receitas visíveis: busca + aba escolhida
-    const visiveis = achadas.filter(r => filtro === 'todas' || (filtro === 'favoritas' ? ehFavorita(r) : (r.categoria_id || 'sem') === filtro));
-    const aba = abas.find(a => a.id === filtro);
-    titulo.textContent = filtro === 'todas'
-      ? (palavras.length ? `Encontradas (${visiveis.length})` : `Minhas receitas (${data.length})`)
-      : `${aba.nome} (${visiveis.length})`;
-
-    barraAbas.replaceChildren(...abas.map(a => el('button', {
-      class: 'aba' + (a.id === filtro ? ' ativa' : ''), type: 'button', role: 'tab',
-      'aria-selected': a.id === filtro ? 'true' : 'false',
-      onclick: () => { filtro = a.id; gravarPreferencia('categoria', filtro); desenhar(); }
-    }, `${a.nome} `, el('span', { class: 'aba-qtd', text: String(a.qtd) }))));
+    titulo.textContent = inicio ? `Encontradas (${visiveis.length})`
+      : `${nomeDoFiltro(filtro)} (${visiveis.length})`;
+    botoesVisao.hidden = false;
     botoesVisao.replaceChildren(
       el('button', { class: 'botao pequeno' + (visao === 'grade' ? ' selecionado' : ''), type: 'button', 'aria-pressed': visao === 'grade' ? 'true' : 'false',
         onclick: () => { visao = 'grade'; gravarPreferencia('visao', visao); desenhar(); } }, '▦ Grade'),
@@ -693,23 +734,26 @@ async function telaLista() {
         onclick: () => { visao = 'lista'; gravarPreferencia('visao', visao); desenhar(); } }, '☰ Lista'));
     if (!visiveis.length) {
       area.replaceChildren(el('p', { class: 'aviso', text: palavras.length
-        ? `Nenhuma receita com "${estado.busca.trim()}"${filtro !== 'todas' ? ' nesta categoria' : ''}.`
+        ? `Nenhuma receita com "${estado.buscaLista.texto.trim()}"${inicio ? '' : ' nesta categoria'}.`
         : 'Nenhuma receita nesta categoria.' }));
     } else {
       area.replaceChildren(visao === 'lista'
         ? el('div', { class: 'lista' }, visiveis.map(itemLista))
         : el('div', { class: 'grade' }, visiveis.map(itemGrade)));
     }
-    barraAbas.querySelector('.ativa')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
-  const posicao = estado.rolagemLista || 0;
-  mostrar(cabecalho, avisoRevisaoPendente(), campoBusca, barraAbas, botoesVisao, area);
+  const chaveRolagem = location.hash || '#/';
+  const posicao = estado.rolagem[chaveRolagem] || 0;
+  mostrar(
+    inicio ? null : el('p', {}, el('a', { href: '#/' }, '← Categorias')),
+    cabecalho, avisoRevisaoPendente(), campoBusca, botoesVisao, area);
   desenhar();
-  // Volta ao ponto em que a lista estava (versão 18).
+  // Volta ao ponto em que esta tela estava (versão 18; uma posição por tela na versão 19).
   window.scrollTo(0, posicao);
-  estado.rolagemLista = posicao;
-  listaNaTela = true;
+  estado.rolagem[chaveRolagem] = posicao;
+  estado.ultimaLista = chaveRolagem;
+  listaNaTela = chaveRolagem;
   if (buscaTinhaFoco) campoBusca.focus({ preventScroll: true });
 }
 
@@ -884,12 +928,15 @@ async function telaReceita(id) {
     link ? el('a', { href: link, target: '_blank', rel: 'noopener noreferrer' }, 'abrir original') : null) : null;
 
   mostrar(el('article', { class: 'receita' },
-    el('p', {}, el('a', { href: '#/' }, '← Voltar')),
+    el('p', {}, el('a', { href: hashDaUltimaLista() }, '← Voltar')),
     urls[r.imagem_caminho] ? elementoCapa(urls[r.imagem_caminho], r.titulo) : null,
     el('h1', { text: r.titulo }),
     resumo.length ? el('div', { class: 'resumo' }, resumo.map(t => el('span', { text: t }))) : null,
     r.etiquetas.length ? el('div', { class: 'etiquetas' }, r.etiquetas.map(t => el('span', { class: 'etiqueta', text: t }))) : null,
-    el('div', { class: 'acoes acoes-topo' }, botaoFavorita, botaoTela),
+    el('div', { class: 'acoes acoes-topo' },
+      r.passos.length ? el('a', { class: 'botao pequeno principal', href: `#/cozinha/${r.id}`,
+        onclick: () => { estado.fatorCozinha = { id: r.id, fator: fator() }; } }, '👩‍🍳 Modo cozinha') : null,
+      botaoFavorita, botaoTela),
     el('h2', { text: 'Ingredientes' }),
     r.ingredientes.some(i => i.quantidade !== null && i.quantidade !== undefined) ? seletorPorcoes : null,
     r.ingredientes.length ? listaIng : el('p', { class: 'aviso', text: 'Sem ingredientes.' }),
@@ -897,7 +944,7 @@ async function telaReceita(id) {
     (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
     el('h2', { text: 'Modo de preparo' }),
     blocoVideo(r.fonte_url),
-    r.passos.length ? passosAgrupados(r.passos, urls) : el('p', { class: 'aviso', text: 'Sem passos.' }),
+    r.passos.length ? passosAgrupados(r.passos, urls, r.titulo) : el('p', { class: 'aviso', text: 'Sem passos.' }),
     r.observacoes ? el('h2', { text: 'Observações' }) : null,
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
@@ -945,8 +992,237 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && querTelaAcesa && (!telaAcesa || telaAcesa.released)) pedirTelaAcesa();
 });
 window.addEventListener('hashchange', () => {
-  if (!location.hash.startsWith('#/receita/')) {
+  if (!location.hash.startsWith('#/receita/') && !location.hash.startsWith('#/cozinha/')) {
     querTelaAcesa = false; botaoTelaAtual = null;
+    if (telaAcesa && !telaAcesa.released) telaAcesa.release().catch(() => {});
+    telaAcesa = null;
+  }
+});
+
+// ---------------------------------------------------------------------
+// Versão 19: timers. Tempos escritos nos passos ("40 minutos", "1 h 30",
+// "meia hora", "20 a 25 min") viram botões "⏱". Os timers continuam em
+// todas as telas, sobrevivem a recarregar e tocam um alarme no fim.
+// Limite do iPhone: com o app em segundo plano o som não toca; ao voltar,
+// o aviso aparece na hora (o tempo é contado pelo relógio, não pelo app).
+// ---------------------------------------------------------------------
+const PADRAO_TEMPO = new RegExp([
+  '(\\d+)\\s*(?:h|hr|hrs|horas?)\\s*(?:e\\s*)?(\\d{1,2})\\s*(?:min|minutos?)?(?![\\w])',          // 1 h 30 / 1h30min / 1 hora e 30 minutos
+  '(\\d+(?:[.,]\\d+)?)\\s*(?:a|-|–|ou)\\s*\\d+(?:[.,]\\d+)?\\s*(min|minutos?|h|hrs?|horas?|seg|segundos?)(?![\\w])', // 20 a 25 minutos
+  '(meia)\\s+hora',
+  '(\\d+(?:[.,]\\d+)?|uma?|dois|duas|tr[eê]s|cinco|dez|quinze|vinte|trinta|quarenta)\\s*(min|minutos?|h|hrs?|horas?|seg|segundos?)(?![\\w])'
+].join('|'), 'gi');
+const NUMEROS_ESCRITOS = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, 'três': 3, cinco: 5, dez: 10, quinze: 15, vinte: 20, trinta: 30, quarenta: 40 };
+function emSegundos(n, unidade) {
+  const v = NUMEROS_ESCRITOS[String(n).toLowerCase()] ?? Number(String(n).replace(',', '.'));
+  const u = unidade.toLowerCase();
+  return Math.round(v * (u.startsWith('h') ? 3600 : u.startsWith('s') ? 1 : 60));
+}
+function textoDuracao(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), seg = s % 60;
+  if (h) return m ? `${h} h ${m} min` : `${h} h`;
+  if (m) return seg ? `${m} min ${seg} s` : `${m} min`;
+  return `${seg} s`;
+}
+/** Tempos encontrados no texto de um passo, sem repetir. */
+function temposNoTexto(texto) {
+  const achados = [];
+  for (const m of String(texto || '').matchAll(PADRAO_TEMPO)) {
+    let s = null;
+    if (m[1] !== undefined) s = Number(m[1]) * 3600 + Number(m[2]) * 60;
+    else if (m[3] !== undefined) s = emSegundos(m[3], m[4]);
+    else if (m[5] !== undefined) s = 30 * 60;
+    else if (m[6] !== undefined) s = emSegundos(m[6], m[7]);
+    if (s && s >= 5 && s <= 24 * 3600 && !achados.includes(s)) achados.push(s);
+  }
+  return achados.slice(0, 3);
+}
+function botoesTimer(texto, rotulo) {
+  if (!rotulo) return null;
+  const tempos = temposNoTexto(texto);
+  if (!tempos.length) return null;
+  return el('span', { class: 'timers-passo' }, tempos.map(s => el('button', {
+    class: 'timer-botao', type: 'button', 'aria-label': `Iniciar timer de ${textoDuracao(s)}`,
+    onclick: (ev) => { ev.stopPropagation(); iniciarTimer(s, rotulo); }
+  }, `⏱ ${textoDuracao(s)}`)));
+}
+
+const CHAVE_TIMERS = 'receitas.timers';
+let timers = [];
+try { timers = JSON.parse(localStorage.getItem(CHAVE_TIMERS) || '[]').filter(x => x && Number.isFinite(x.fim) && typeof x.rotulo === 'string'); } catch { timers = []; }
+let painelTimers = null, relogioTimers = null, somAlarme = null, contextoSom = null;
+function gravarTimers() { try { localStorage.setItem(CHAVE_TIMERS, JSON.stringify(timers)); } catch { /* sem armazenamento */ } }
+function restante(x) { return x.pausadoRestante != null ? x.pausadoRestante : Math.max(0, Math.round((x.fim - Date.now()) / 1000)); }
+function relogio(s) { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), seg = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(seg).padStart(2, '0'); }
+
+/** Som do alarme (o iPhone só libera o som depois de um toque: ele é preparado ao iniciar o timer). */
+function prepararSom() {
+  try {
+    const Contexto = window.AudioContext || window.webkitAudioContext;
+    if (!Contexto) return;
+    contextoSom = contextoSom || new Contexto();
+    if (contextoSom.state === 'suspended') contextoSom.resume();
+  } catch { contextoSom = null; }
+}
+function bipe() {
+  if (!contextoSom) return;
+  try {
+    const agora = contextoSom.currentTime;
+    for (const atraso of [0, 0.25, 0.5]) {
+      const osc = contextoSom.createOscillator(), volume = contextoSom.createGain();
+      osc.frequency.value = 880; volume.gain.value = 0.25;
+      osc.connect(volume); volume.connect(contextoSom.destination);
+      osc.start(agora + atraso); osc.stop(agora + atraso + 0.15);
+    }
+  } catch { /* sem som */ }
+}
+function tocarAlarme() {
+  if (somAlarme) return;
+  let vezes = 0;
+  bipe(); navigator.vibrate?.([300, 150, 300]);
+  somAlarme = setInterval(() => { bipe(); if (++vezes >= 30) pararAlarme(); }, 2000); // até 1 minuto
+}
+function pararAlarme() { clearInterval(somAlarme); somAlarme = null; document.title = 'Receitas na mão'; }
+
+function iniciarTimer(segundos, rotulo) {
+  prepararSom();
+  timers.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), rotulo: rotulo.slice(0, 120), total: segundos, fim: Date.now() + segundos * 1000, pausadoRestante: null, avisado: false });
+  gravarTimers();
+  desenharTimers();
+}
+function desenharTimers() {
+  if (!painelTimers) {
+    painelTimers = el('section', { class: 'painel-timers', 'aria-label': 'Timers' });
+    document.body.append(painelTimers);
+  }
+  if (!timers.length) { painelTimers.hidden = true; painelTimers.replaceChildren(); clearInterval(relogioTimers); relogioTimers = null; pararAlarme(); document.body.style.paddingBottom = ''; document.documentElement.style.removeProperty('--altura-timers'); return; }
+  painelTimers.hidden = false;
+  let algumTocando = false;
+  painelTimers.replaceChildren(...timers.map(x => {
+    const s = restante(x);
+    const acabou = s === 0 && x.pausadoRestante == null;
+    if (acabou) { algumTocando = true; if (!x.avisado) { x.avisado = true; gravarTimers(); } }
+    return el('div', { class: 'timer' + (acabou ? ' acabou' : ''), role: acabou ? 'alert' : null },
+      el('div', { class: 'timer-texto' },
+        el('span', { class: 'timer-relogio', text: acabou ? 'Pronto!' : relogio(s) }),
+        el('span', { class: 'timer-rotulo', text: x.rotulo })),
+      acabou ? null : el('button', { class: 'botao pequeno', type: 'button', 'aria-label': x.pausadoRestante != null ? 'Continuar timer' : 'Pausar timer',
+        onclick: () => { if (x.pausadoRestante != null) { x.fim = Date.now() + x.pausadoRestante * 1000; x.pausadoRestante = null; } else x.pausadoRestante = restante(x); gravarTimers(); desenharTimers(); } },
+        x.pausadoRestante != null ? '▶ Seguir' : 'Pausar'),
+      acabou ? null : el('button', { class: 'botao pequeno', type: 'button', 'aria-label': 'Mais 1 minuto',
+        onclick: () => { if (x.pausadoRestante != null) x.pausadoRestante += 60; else x.fim += 60000; gravarTimers(); desenharTimers(); } }, '+1 min'),
+      el('button', { class: 'botao pequeno' + (acabou ? ' principal' : ''), type: 'button', 'aria-label': acabou ? 'Parar alarme' : 'Cancelar timer',
+        onclick: () => { timers = timers.filter(y => y !== x); gravarTimers(); if (!timers.some(y => restante(y) === 0 && y.pausadoRestante == null)) pararAlarme(); desenharTimers(); } },
+        acabou ? 'Parar' : '✕'));
+  }));
+  if (algumTocando) { tocarAlarme(); document.title = '⏰ Pronto! · Receitas na mão'; }
+  // O painel não cobre o fim da tela nem os botões do modo cozinha.
+  document.documentElement.style.setProperty('--altura-timers', `${painelTimers.offsetHeight + 8}px`);
+  document.body.style.paddingBottom = `calc(${painelTimers.offsetHeight + 8}px + env(safe-area-inset-bottom))`;
+  if (!relogioTimers) relogioTimers = setInterval(desenharTimers, 1000);
+}
+if (timers.length) desenharTimers();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && timers.length) desenharTimers(); });
+
+// ---------------------------------------------------------------------
+// Versão 19: modo cozinha. Um passo por vez, em letra grande, com a foto
+// do passo, os timers e os ingredientes à mão. A tela fica acesa.
+// Anterior/Próximo pelos botões, deslizando o dedo ou pelas setas do teclado.
+// ---------------------------------------------------------------------
+let telaAcesaPelaCozinha = false;
+let cozinhaAberta = null; // { ir(delta) }
+async function telaCozinha(id) {
+  mensagem('Carregando…');
+  let r;
+  try { r = await buscarReceitaCompleta(id); } catch (e) { return mensagem(erroAmigavel(e), 'erro'); }
+  if (!r || !r.passos.length) { location.hash = r ? `#/receita/${id}` : '#/'; return; }
+  const urls = await urlsDasImagens(r.passos.map(p => p.imagem_caminho));
+  const fator = estado.fatorCozinha?.id === id ? estado.fatorCozinha.fator : 1;
+  estado.passoCozinha = estado.passoCozinha?.id === id ? estado.passoCozinha : { id, n: 0 };
+  const total = r.passos.length;
+
+  const progresso = el('div', { class: 'cozinha-progresso', role: 'status' });
+  const barra = el('div', { class: 'cozinha-barra' }, el('span'));
+  const grupo = el('div', { class: 'cozinha-grupo' });
+  const texto = el('p', { class: 'cozinha-texto' });
+  const timersDoPasso = el('div', { class: 'cozinha-timers' });
+  const foto = el('div', { class: 'cozinha-foto' });
+  const anterior = el('button', { class: 'botao', type: 'button' }, '← Anterior');
+  const proximo = el('button', { class: 'botao principal', type: 'button' }, 'Próximo →');
+
+  const listaIng = el('ul', { class: 'ingredientes cozinha-ingredientes' }, r.ingredientes.map(i => {
+    const q = i.quantidade != null ? (Math.abs(fator - 1) < 1e-9 ? formatarQuantidade(i.quantidade) : formatarEscalada(i.quantidade * fator)) : null;
+    const qtd = [q, i.unidade].filter(Boolean).join(' ');
+    return el('li', { class: 'marcavel', onclick: (ev) => ev.currentTarget.classList.toggle('feito') },
+      i.grupo ? el('small', { class: 'cozinha-ing-grupo', text: i.grupo + ': ' }) : null,
+      qtd ? el('span', { class: 'quantidade', text: qtd + ' ' }) : null, i.nome, i.observacao ? ` (${i.observacao})` : null);
+  }));
+  const painelIng = el('div', { class: 'cozinha-painel-ing', hidden: true },
+    el('h2', { text: Math.abs(fator - 1) < 1e-9 ? 'Ingredientes' : `Ingredientes (${formatarNumero(fator)}x)` }), listaIng);
+  const botaoIng = el('button', { class: 'botao pequeno', type: 'button', 'aria-expanded': 'false' }, 'Ingredientes');
+  botaoIng.addEventListener('click', () => {
+    painelIng.hidden = !painelIng.hidden;
+    botaoIng.setAttribute('aria-expanded', painelIng.hidden ? 'false' : 'true');
+    botaoIng.textContent = painelIng.hidden ? 'Ingredientes' : 'Voltar ao passo';
+  });
+
+  function desenhar() {
+    const n = estado.passoCozinha.n = Math.min(total - 1, Math.max(0, estado.passoCozinha.n));
+    const p = r.passos[n];
+    progresso.textContent = `Passo ${n + 1} de ${total}`;
+    barra.firstChild.style.width = `${Math.round(((n + 1) / total) * 100)}%`;
+    grupo.textContent = p.grupo || '';
+    grupo.hidden = !p.grupo;
+    texto.textContent = p.texto;
+    timersDoPasso.replaceChildren(botoesTimer(p.texto, `${r.titulo}, passo ${n + 1}`) || '');
+    const url = p.imagem_caminho ? urls[p.imagem_caminho] : null;
+    foto.replaceChildren(url ? el('img', { src: url, alt: `Foto do passo ${n + 1}` }) : '');
+    foto.hidden = !url;
+    anterior.disabled = n === 0;
+    proximo.textContent = n === total - 1 ? 'Concluir ✓' : 'Próximo →';
+    if (!painelIng.hidden) botaoIng.click();
+    window.scrollTo(0, 0);
+  }
+  const ir = (delta) => {
+    if (delta > 0 && estado.passoCozinha.n === total - 1) { estado.passoCozinha = null; location.hash = `#/receita/${id}`; return; }
+    estado.passoCozinha.n += delta; desenhar();
+  };
+  anterior.addEventListener('click', () => ir(-1));
+  proximo.addEventListener('click', () => ir(1));
+
+  const secao = el('section', { class: 'cozinha', 'aria-label': `Modo cozinha: ${r.titulo}` },
+    el('div', { class: 'cozinha-topo' },
+      el('a', { class: 'botao pequeno', href: `#/receita/${id}` }, '✕ Sair'),
+      el('h1', { class: 'cozinha-titulo', text: r.titulo }),
+      botaoIng),
+    barra, progresso, grupo, texto, timersDoPasso, foto, painelIng,
+    el('div', { class: 'cozinha-navegacao' }, anterior, proximo));
+  // Deslizar o dedo para o lado troca de passo.
+  let toque = null;
+  secao.addEventListener('touchstart', (ev) => { toque = ev.touches.length === 1 ? { x: ev.touches[0].clientX, y: ev.touches[0].clientY } : null; }, { passive: true });
+  secao.addEventListener('touchend', (ev) => {
+    if (!toque || !painelIng.hidden) return;
+    const dx = ev.changedTouches[0].clientX - toque.x, dy = ev.changedTouches[0].clientY - toque.y;
+    toque = null;
+    if (Math.abs(dx) > 60 && Math.abs(dy) < 50) { if (dx < 0) ir(1); else if (estado.passoCozinha.n > 0) ir(-1); }
+  }, { passive: true });
+
+  mostrar(secao);
+  desenhar();
+  cozinhaAberta = { ir };
+  // Tela acesa enquanto cozinha (se o aparelho permitir).
+  if ('wakeLock' in navigator && (!telaAcesa || telaAcesa.released)) { querTelaAcesa = true; telaAcesaPelaCozinha = true; pedirTelaAcesa(); }
+}
+document.addEventListener('keydown', (ev) => {
+  if (!cozinhaAberta || !location.hash.startsWith('#/cozinha/') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) return;
+  if (ev.key === 'ArrowRight') { ev.preventDefault(); cozinhaAberta.ir(1); }
+  if (ev.key === 'ArrowLeft') { ev.preventDefault(); cozinhaAberta.ir(-1); }
+});
+window.addEventListener('hashchange', () => {
+  if (location.hash.startsWith('#/cozinha/')) return;
+  cozinhaAberta = null;
+  if (telaAcesaPelaCozinha) {
+    telaAcesaPelaCozinha = false; querTelaAcesa = false;
     if (telaAcesa && !telaAcesa.released) telaAcesa.release().catch(() => {});
     telaAcesa = null;
   }
@@ -1486,7 +1762,7 @@ function esperarEvento(alvo, evento, msTempo, mensagemErro) {
 
 /** Lê a duração e tira quadros do vídeo (até 30, espalhados). */
 /** Passos em blocos por grupo (Massa, Recheio...), com numeração corrida e foto do passo (versão 17). */
-function passosAgrupados(passos, urls = {}) {
+function passosAgrupados(passos, urls = {}, rotuloTimer = null) {
   const blocos = [];
   for (const p of passos) {
     const g = p.grupo || null;
@@ -1499,6 +1775,7 @@ function passosAgrupados(passos, urls = {}) {
       const url = p.imagem_caminho ? urls[p.imagem_caminho] : null;
       return el('li', { class: 'marcavel', onclick: (ev) => ev.currentTarget.classList.toggle('feito') },
         el('span', { class: 'texto-passo', text: p.texto }),
+        botoesTimer(p.texto, rotuloTimer ? `${rotuloTimer}, passo ${numero + b.itens.indexOf(p)}` : null),
         url ? el('img', { class: 'foto-passo', src: url, alt: `Foto do passo: ${p.texto.slice(0, 80)}`, loading: 'lazy' }) : null);
     }));
     numero += b.itens.length;
@@ -2200,13 +2477,15 @@ async function rotear() {
   }
   try {
     if (partes[0] === 'receita' && partes[1]) return await telaReceita(partes[1]);
+    if (partes[0] === 'categoria' && partes[1]) return await telaLista(partes[1]);
+    if (partes[0] === 'cozinha' && partes[1]) return await telaCozinha(partes[1]);
     if (partes[0] === 'editar' && partes[1]) return await telaFormulario(partes[1]);
     if (partes[0] === 'nova') return telaImportar();
     if (partes[0] === 'manual') return await telaFormulario(null);
     if (partes[0] === 'revisar') return await telaRevisao();
     if (partes[0] === 'ajustes') return telaAjustes();
     if (partes[0] === 'categorias') return await telaCategorias();
-    return await telaLista();
+    return await telaLista(null);
   } catch (e) {
     mensagem(erroAmigavel(e), 'erro');
   }
@@ -2534,7 +2813,7 @@ async function tentarReconectar() {
   try {
     await comLimite(atualizarColecao(), 15000);
     mostrarFaixa();
-    if (/^#?\/?$/.test(location.hash) || location.hash.startsWith('#/receita/')) rotear();
+    if (/^#(\/(categoria\/[\w-]+)?)?$/.test(location.hash) || location.hash.startsWith('#/receita/')) rotear();
   } catch { /* continua com a cópia */ }
 }
 

@@ -1,5 +1,14 @@
 # Histórico de versões
 
+## Versão 19 (10/11/2026): tela inicial por categorias, modo cozinha e timers
+
+- **Tela inicial por categorias (IMP-015, pedido de Rafael)**: um quadro por categoria, com a foto da receita mais recente e a quantidade ("11 receitas"). Primeiro **Todas** e **★ Favoritas** (só quando há favoritas), depois as categorias com receitas (A a Z), **Sem categoria** (se houver) e, no fim, as vazias. Saiu a barra de abas. A busca da tela inicial procura em todas e mostra as receitas encontradas; limpando, voltam os quadros. Tocar num quadro abre a lista da categoria (com busca só dentro dela, grade/lista e "← Categorias"). "← Voltar" da receita leva à categoria de onde você veio, no mesmo lugar.
+- **Modo cozinha (IMP-006)**: botão **👩‍🍳 Modo cozinha** na receita. Um passo por vez, letra grande, nome do grupo (Massa, Recheio), foto do passo e barra de progresso. **← Anterior / Próximo →** (grandes, sempre visíveis), deslizar o dedo para o lado ou setas do teclado. **Ingredientes** abre a lista com a porção escolhida na receita. Tela acesa enquanto estiver no modo cozinha. **✕ Sair** guarda o passo; **Concluir ✓** no último volta à receita.
+- **Timers (IMP-007)**: tempos escritos nos passos ("40 minutos", "1 h 30", "meia hora", "20 a 25 minutos", "10 segundos") viram botões **⏱**. O timer aparece num painel no pé da tela, continua em todas as telas e depois de recarregar, com **Pausar**, **+1 min** e **✕**. No fim: "Pronto!", alarme sonoro por até 1 minuto (vibra no Android), título da aba "⏰ Pronto!" e **Parar**. Limite do iPhone: com o app em segundo plano o som não toca; ao voltar, o aviso aparece na hora.
+- Impressão sem timers e sem o botão do modo cozinha.
+- Sem SQL e sem mudança na função da IA.
+- Testes locais: versão 19 49 de 49, versão 18 54 de 54, extensão 27 de 27, importação 47 de 47, cadastro 25 de 25, lista 32 de 32, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, versão 17 39 de 39, áudio 7 de 7.
+
 ## Versão 18 (10/11/2026): pronto para 200+ receitas (auditoria de 10/11)
 
 - **Abre na hora (IMP-001)**: com a cópia no aparelho, a lista aparece na hora e a leitura do Supabase corre por trás. Se demorar mais de 1,5 s, aparece "Atualizando…" discreto ao lado do nome do app. Só redesenha se algo mudou de verdade, e nunca por cima de um formulário. Sem resposta da rede, mostra a faixa "Sem internet" como antes. Com rede de 4G simulada (0,3 s por consulta), abrir caiu de 2,6 s para 1,3 s; com rede travada, de 6,4 s para 0,4 s.
