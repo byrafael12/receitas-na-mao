@@ -292,11 +292,38 @@ input[type="checkbox"] { width: 24px; height: 24px; }
 .etiqueta-filtro.ativa { background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); font-weight: 600; }
 .etiqueta-filtro.limpar { border-style: dashed; color: var(--texto-suave); }
 
+/* Versão 22: lista de compras */
+.topo { justify-content: flex-start; gap: 4px; }
+.topo .sincronizando { margin: 0 0 0 10px; }
+.topo > a[href="#/ajustes"] { margin-left: auto; }
+.topo > .link-compras { margin-left: auto; position: relative; }
+.topo > .link-compras + a[href="#/ajustes"] { margin-left: 0; }
+.selo-compras { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--destaque); color: var(--destaque-texto); font-size: 0.7rem; font-weight: 700; line-height: 18px; text-align: center; }
+.aviso-lista { display: block; min-height: 1.2em; margin: 2px 0 8px; font-size: 0.9rem; color: var(--texto-suave); }
+.form-item-compra { display: flex; gap: 8px; margin-bottom: 8px; }
+.form-item-compra input { flex: 1; min-width: 0; }
+.resumo-compras { color: var(--texto-suave); margin: 12px 0 8px; }
+.receitas-na-lista { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chip-receita { display: inline-flex; align-items: center; gap: 2px; padding-left: 12px; border: 1px solid var(--borda); border-radius: 999px; background: var(--superficie); font-size: 0.9rem; }
+.chip-receita a { color: var(--texto); text-decoration: none; }
+.chip-remover { min-width: 44px; min-height: 44px; border: 0; background: none; color: var(--texto-suave); font: inherit; cursor: pointer; border-radius: 999px; }
+.lista-compras { list-style: none; padding: 0; margin: 0 0 16px; border-top: 1px solid var(--borda); }
+.lista-compras li { border-bottom: 1px solid var(--borda); }
+.item-compra { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 2px; border: 0; background: none; color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+.caixa-marcar { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 2px solid var(--borda); border-radius: 6px; font-weight: 700; color: var(--destaque-texto); }
+.item-compra.feito { text-decoration: none; opacity: 1; }
+.item-compra.feito .caixa-marcar { background: var(--destaque); border-color: var(--destaque); }
+.item-compra.feito .item-compra-nome, .item-compra.feito .item-compra-qtd { text-decoration: line-through; color: var(--texto-suave); }
+.item-compra-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.item-compra-nome { font-weight: 600; overflow-wrap: anywhere; }
+.item-compra-origem { font-size: 0.8rem; color: var(--texto-suave); overflow-wrap: anywhere; }
+.item-compra-qtd { flex: 0 0 auto; max-width: 45%; text-align: right; color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+
 /* Impressão: só a receita, sem botões nem barras */
 @media print {
   :root { --fundo: #fff; --superficie: #fff; --texto: #000; --texto-suave: #333; --borda: #bbb; color-scheme: light; }
   body { font-size: 12pt; }
-  .topo, .faixa-offline, .acoes, .bloco-video, .painel-timers, .timers-passo, .porcoes .botao, .porcoes-aviso, .receita > p:first-child { display: none !important; }
+  .topo, .faixa-offline, .acoes, .form-item-compra, .chip-remover, .aviso-lista, .bloco-video, .painel-timers, .timers-passo, .porcoes .botao, .porcoes-aviso, .receita > p:first-child { display: none !important; }
   .conteudo { max-width: none; padding: 0; }
   .receita .capa { max-height: 7cm; width: auto; max-width: 100%; aspect-ratio: auto; }
   .receita h1 { font-size: 20pt; }

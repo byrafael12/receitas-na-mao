@@ -123,6 +123,48 @@ function listaTextos(v: unknown, maxItens: number, maxLetras: number): string[] 
   return saida;
 }
 
+// ---------------------------------------------------------------------
+// Versão 22 (IMP-011): unidades padrão. MESMA lista do app.js (unidadePadrao).
+// A IA recebe a lista; o que vier fora dela é corrigido aqui:
+// sinônimo vira a forma padrão; "a gosto" fica sem unidade; unidade
+// desconhecida vai para o nome ("1 barra de chocolate" continua legível).
+// ---------------------------------------------------------------------
+const UNIDADES = ['g', 'kg', 'ml', 'l', 'xícara (chá)', 'colher (sopa)', 'colher (sobremesa)', 'colher (chá)', 'copo',
+  'pitada', 'un', 'dente', 'gomo', 'fatia', 'folha', 'ramo', 'maço', 'lata', 'caixa', 'pacote', 'vidro', 'sachê',
+  'tablete', 'barra', 'rolo', 'pedaço', 'punhado'];
+const SINONIMOS_UNIDADE: Record<string, string[]> = {
+  g: ['gr', 'grs', 'grama', 'gramas'], kg: ['kgs', 'quilo', 'quilos', 'kilo', 'kilos', 'quilograma', 'quilogramas'],
+  ml: ['mililitro', 'mililitros'], l: ['lt', 'lts', 'litro', 'litros'],
+  'xícara (chá)': ['xicara', 'xicara cha', 'xic', 'xic cha', 'x cha', 'cup', 'cups'],
+  'colher (sopa)': ['colher', 'colher sopa', 'cs', 'c sopa', 'csp', 'tbsp', 'colher sopa cheia', 'colher sopa rasa'],
+  'colher (sobremesa)': ['colher sobremesa'],
+  'colher (chá)': ['colher cha', 'cc', 'c cha', 'tsp', 'colherzinha', 'colher cafe'],
+  copo: ['copo americano'], un: ['und', 'unid', 'uni', 'unidade', 'u'], 'maço': ['maco'], 'sachê': ['sache', 'envelope'],
+  caixa: ['caixinha', 'cx'], pacote: ['pct', 'pcte'], 'pedaço': ['pedaco'], ramo: ['raminho'], tablete: ['tablete']
+};
+const semAcento = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const chaveUnidade = (t: string) => semAcento(t).replace(/[().]/g, ' ').replace(/\b(de|do|da)\b/g, ' ').replace(/\s+/g, ' ').trim();
+const UNIDADE_POR_CHAVE = new Map<string, string>();
+for (const u of UNIDADES) UNIDADE_POR_CHAVE.set(chaveUnidade(u), u);
+for (const [u, lista] of Object.entries(SINONIMOS_UNIDADE)) for (const x of lista) UNIDADE_POR_CHAVE.set(chaveUnidade(x), u);
+/** Forma padrão; null = sem unidade ("a gosto" ou vazio); undefined = desconhecida. */
+function unidadePadrao(texto: string | null): string | null | undefined {
+  const original = (texto || '').trim();
+  if (!original) return null;
+  const k = chaveUnidade(original);
+  if (k === 'a gosto' || k === 'gosto') return null;
+  const singular = k.split(' ').map(p => p.length > 2 ? p.replace(/es$/, '').replace(/s$/, '') : p).join(' ');
+  return UNIDADE_POR_CHAVE.get(k) ?? UNIDADE_POR_CHAVE.get(singular) ?? UNIDADE_POR_CHAVE.get(k.replace(/s\b/g, ''));
+}
+function ajustarUnidade(i: { quantidade: number | null; unidade: string | null; nome: string | null }) {
+  const original = i.unidade;
+  const padrao = unidadePadrao(original);
+  if (padrao !== undefined) return { ...i, unidade: padrao, quantidade: original && padrao === null ? null : i.quantidade };
+  // Desconhecida: vai para o nome, se ainda não estiver lá.
+  const nome = i.nome && original && !semAcento(i.nome).includes(semAcento(original)) ? `${original} de ${i.nome}`.slice(0, 200) : i.nome;
+  return { ...i, unidade: null, nome };
+}
+
 // deno-lint-ignore no-explicit-any
 function limparReceita(r: any, categorias: string[], totalImagens: number) {
   const nomesCategoria = new Map(categorias.map(c => [c.toLowerCase(), c]));
@@ -137,6 +179,7 @@ function limparReceita(r: any, categorias: string[], totalImagens: number) {
       observacao: texto(i?.observacao, 200),
       texto_original: texto(i?.texto_original, 300)
     }))
+    .map(ajustarUnidade)
     .filter((i: { nome: string | null }) => i.nome);
   const capa = inteiro(r?.indice_imagem_capa, 1000);
   return {
@@ -166,7 +209,7 @@ function instrucoes(categorias: string[]): string {
     '1. Responda só com o JSON no formato pedido, em português do Brasil.',
     '2. Nunca invente ingrediente, quantidade, tempo, porção ou passo. Se não estiver no conteúdo, deixe null e cite o campo em campos_duvidosos (ex.: "quantidade da farinha", "porções").',
     '3. Junte as fontes. A legenda e o texto na tela costumam trazer ingredientes e quantidades; o áudio e os quadros costumam mostrar o preparo. Se houver conflito, prefira o texto escrito e registre em campos_duvidosos.',
-    '4. Ingredientes: separe quantidade (número; 1/2 vira 0.5; "1 e 1/2" vira 1.5), unidade (g, kg, ml, l, xícara (chá), colher (sopa), colher (chá), unidade, dente, gomo, pitada, lata, pacote) e nome. "A gosto" ou sem quantidade: quantidade null. Guarde a linha como apareceu em texto_original.',
+    '4. Ingredientes: separe quantidade (número; 1/2 vira 0.5; "1 e 1/2" vira 1.5), unidade e nome. A unidade é SEMPRE uma destas, escrita igual: ' + UNIDADES.join(', ') + '. Use "un" para unidades contadas (ovos, cebolas, limões). Sem unidade da lista (ex.: "a gosto"), unidade null. "A gosto" ou sem quantidade: quantidade null. Guarde a linha como apareceu em texto_original.',
     '5. Quando a receita separa massa, recheio, cobertura, calda etc., preencha grupo em cada ingrediente E em cada passo do preparo (mesmos nomes nos dois). Receita sem partes: grupo null.',
     '6. Passos: frases curtas e objetivas, na ordem, reescritas com suas palavras (não copie o texto do autor palavra por palavra), sem numeração no início.',
     '7. Utensílios: só os citados, mostrados ou claramente necessários (ex.: forma, batedeira, frigideira, liquidificador, forno).',

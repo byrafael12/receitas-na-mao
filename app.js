@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '21';
+const VERSAO = '22';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -402,6 +402,7 @@ function sincronizarPorTras(inicial = false) {
         await atualizarColecao();
       })(), 20000);
       mostrarFaixa();
+      atualizarListaPorTras(); // versão 22: lista de compras
       // Redesenha só o que mudou, e nunca por cima de um formulário.
       const rota = location.hash;
       if (estado.titular !== titularAntes) rotear();
@@ -955,6 +956,12 @@ async function telaReceita(id) {
     ? el('button', { class: 'botao pequeno', type: 'button', 'aria-pressed': 'false', onclick: () => alternarTelaAcesa(botaoTela) }, '☀ Manter tela acesa')
     : null;
 
+  // Lista de compras (versão 22): ingredientes na porção escolhida.
+  const avisoLista = el('span', { class: 'aviso-lista', role: 'status' });
+  const botaoLista = estado.titular && r.ingredientes.length
+    ? el('button', { class: 'botao pequeno', type: 'button', onclick: (ev) => adicionarReceitaNaLista(r, fator(), ev.currentTarget, avisoLista) }, '🛒 Lista de compras')
+    : null;
+
   const link = linkSeguro(r.fonte_url);
   const fonte = (link || r.fonte_autor) ? el('p', { class: 'fonte' }, 'Fonte: ',
     r.fonte_autor ? r.fonte_autor + ' ' : null,
@@ -969,7 +976,8 @@ async function telaReceita(id) {
     el('div', { class: 'acoes acoes-topo' },
       r.passos.length ? el('a', { class: 'botao pequeno principal', href: `#/cozinha/${r.id}`,
         onclick: () => { estado.fatorCozinha = { id: r.id, fator: fator() }; } }, '👩‍🍳 Modo cozinha') : null,
-      botaoFavorita, botaoTela),
+      botaoFavorita, botaoTela, botaoLista),
+    botaoLista ? avisoLista : null,
     el('h2', { text: 'Ingredientes' }),
     r.ingredientes.some(i => i.quantidade !== null && i.quantidade !== undefined) ? seletorPorcoes : null,
     r.ingredientes.length ? listaIng : el('p', { class: 'aviso', text: 'Sem ingredientes.' }),
@@ -1473,7 +1481,7 @@ async function telaFormulario(id, revisao = null) {
     const linha = el('div', { class: 'linha-ingrediente', 'data-tipo': 'ing', 'data-original': i.texto_original || null },
       el('input', { type: 'text', inputmode: 'decimal', placeholder: 'Qtd', 'aria-label': 'Quantidade',
         value: i.quantidade_texto ?? (i.quantidade !== null && i.quantidade !== undefined ? formatarQuantidade(i.quantidade) : '') }),
-      el('input', { type: 'text', placeholder: 'Unid.', maxlength: 30, 'aria-label': 'Unidade', value: i.unidade || '' }),
+      el('input', { type: 'text', placeholder: 'Unid.', maxlength: 30, 'aria-label': 'Unidade', value: i.unidade || '', list: 'unidades-padrao', autocomplete: 'off' }),
       el('input', { type: 'text', placeholder: 'Ingrediente', maxlength: 200, 'aria-label': 'Ingrediente', value: i.nome || '' }),
       el('button', { class: 'botao remover', type: 'button', 'aria-label': 'Remover ingrediente', onclick: () => linha.remove() }, '×'));
     return linha;
@@ -1635,7 +1643,7 @@ async function telaFormulario(id, revisao = null) {
       if (!nome) { erros.push('Há ingrediente sem nome.'); continue; }
       const qtd = lerQuantidade(qtdTexto);
       if (Number.isNaN(qtd)) { erros.push(`Quantidade inválida em "${nome}". Use 2, 0,5 ou 1/2.`); continue; }
-      ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: campos[1].value.trim(), nome,
+      ingredientes.push({ grupo: grupoAtual, quantidade: qtd, unidade: unidadePadrao(campos[1].value), nome, // versão 22: forma padrão
         texto_original: linha.dataset.original || null });
     }
     const passos = [];
@@ -1740,6 +1748,7 @@ async function telaFormulario(id, revisao = null) {
       campo('Porções', porcoes), campo('Preparo', tempoPreparo, 'min'), campo('Total', tempoTotal, 'min')),
     el('h2', { text: 'Ingredientes' }),
     listaIngredientes,
+    el('datalist', { id: 'unidades-padrao' }, UNIDADES.map(u => el('option', { value: u }))),
     el('div', { class: 'acoes' },
       el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaIngredientes.append(linhaIngrediente()) }, '+ Ingrediente'),
       el('button', { class: 'botao pequeno', type: 'button', onclick: () => listaIngredientes.append(linhaGrupo()) }, '+ Grupo')),
@@ -2433,6 +2442,290 @@ async function telaAjustes() {
 }
 
 // ---------------------------------------------------------------------
+// Versão 22 (IMP-011): unidades padrão. A IA e o formulário usam a mesma
+// lista; sinônimos ("colher sopa", "colheres de sopa", "cs") viram a forma
+// padrão ao salvar. Receitas antigas só mudam quando você edita e salva;
+// a lista de compras padroniza na hora de somar, sem mexer na receita.
+// A mesma lista está na função da IA (supabase/functions/importar-receita).
+// ---------------------------------------------------------------------
+const UNIDADES = ['g', 'kg', 'ml', 'l', 'xícara (chá)', 'colher (sopa)', 'colher (sobremesa)', 'colher (chá)', 'copo',
+  'pitada', 'un', 'dente', 'gomo', 'fatia', 'folha', 'ramo', 'maço', 'lata', 'caixa', 'pacote', 'vidro', 'sachê',
+  'tablete', 'barra', 'rolo', 'pedaço', 'punhado'];
+const SINONIMOS_UNIDADE = {
+  g: ['gr', 'grs', 'grama', 'gramas'], kg: ['kgs', 'quilo', 'quilos', 'kilo', 'kilos', 'quilograma', 'quilogramas'],
+  ml: ['mililitro', 'mililitros'], l: ['lt', 'lts', 'litro', 'litros'],
+  'xícara (chá)': ['xicara', 'xicara cha', 'xic', 'xic cha', 'x cha', 'cup', 'cups'],
+  'colher (sopa)': ['colher', 'colher sopa', 'cs', 'c sopa', 'csp', 'tbsp', 'colher sopa cheia', 'colher sopa rasa'],
+  'colher (sobremesa)': ['colher sobremesa'],
+  'colher (chá)': ['colher cha', 'cc', 'c cha', 'tsp', 'colherzinha', 'colher cafe'],
+  copo: ['copo americano'], un: ['und', 'unid', 'uni', 'unidade', 'u'], 'maço': ['maco'], 'sachê': ['sache', 'envelope'],
+  caixa: ['caixinha', 'cx'], pacote: ['pct', 'pcte'], 'pedaço': ['pedaco'], ramo: ['raminho'], tablete: ['tablete']
+};
+const UNIDADE_POR_CHAVE = (() => {
+  const m = new Map();
+  const chave = t => normalizar(t).replace(/[().]/g, ' ').replace(/\b(de|do|da)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const u of UNIDADES) m.set(chave(u), u);
+  for (const [u, lista] of Object.entries(SINONIMOS_UNIDADE)) for (const s of lista) m.set(chave(s), u);
+  return { m, chave };
+})();
+/** Forma padrão da unidade. Desconhecida: devolve como foi escrita. "a gosto" e vazio: ''. */
+function unidadePadrao(texto) {
+  const original = String(texto || '').trim();
+  if (!original) return '';
+  const k = UNIDADE_POR_CHAVE.chave(original);
+  if (k === 'a gosto' || k === 'gosto') return '';
+  const { m } = UNIDADE_POR_CHAVE;
+  const singular = k.split(' ').map(p => p.length > 2 ? p.replace(/es$/, '').replace(/s$/, '') : p).join(' ');
+  return m.get(k) || m.get(singular) || m.get(k.replace(/s\b/g, '')) || original;
+}
+
+// ---------------------------------------------------------------------
+// Versão 22 (IMP-008): lista de compras.
+// Tabela lista_compras (script 13): uma linha por ingrediente, com a
+// receita de origem e a porção. Na tela, os iguais são somados (g com kg,
+// ml com l). Riscar funciona sem internet: a marcação fica no aparelho e
+// vai para o Supabase quando a conexão voltar.
+// ---------------------------------------------------------------------
+const CAMPOS_LISTA = 'id, receita_id, receita_titulo, fator, nome, quantidade, unidade, marcado, criado_em';
+const chaveListaLocal = () => `lista-compras-${estado.usuario?.id || ''}`;
+const FAMILIAS_UNIDADE = { g: ['massa', 1], kg: ['massa', 1000], ml: ['volume', 1], l: ['volume', 1000] };
+const PALAVRAS_DESCRITIVAS = new Set(['picado', 'picada', 'picadinho', 'picadinha', 'ralado', 'ralada', 'cortado', 'cortada',
+  'fatiado', 'fatiada', 'amassado', 'amassada', 'maduro', 'madura', 'grande', 'medio', 'media', 'pequeno', 'pequena',
+  'batido', 'batida', 'peneirado', 'peneirada', 'inteiro', 'inteira', 'fresco', 'fresca', 'sem', 'pele', 'semente',
+  'em', 'rodela', 'cubo', 'bem', 'a', 'gosto', 'de', 'do', 'da', 'e', 'para', 'o']);
+const singularizar = p => p.length <= 3 ? p : p.replace(/oes$/, 'ao').replace(/aes$/, 'ao').replace(/([rz])es$/, '$1').replace(/([^s])s$/, '$1');
+/** Nome limpo para exibir: sem parênteses e sem o que vem depois da vírgula. */
+const nomeLimpo = n => String(n || '').replace(/\([^)]*\)/g, ' ').split(',')[0].replace(/\s+/g, ' ').trim() || String(n || '').trim();
+/** Chave para juntar ingredientes iguais ("Cebolas picadas" = "cebola"). */
+function chaveIngrediente(nome) {
+  const base = normalizar(nomeLimpo(nome)).replace(/-/g, ' ').replace(/[^a-z0-9 ]/g, ' ');
+  const palavras = base.split(/\s+/).filter(Boolean).map(singularizar);
+  const essenciais = palavras.filter(p => !PALAVRAS_DESCRITIVAS.has(p));
+  return (essenciais.length ? essenciais : palavras).join(' ');
+}
+function textoQuantidade(v, unidade) {
+  // 1.400 g vira "1,4 kg" (com vírgula: fração de quilo não é medida de cozinha).
+  if (unidade === 'g' && v >= 1000) return `${formatarNumero(Math.round(v / 10) / 100)} kg`;
+  if (unidade === 'ml' && v >= 1000) return `${formatarNumero(Math.round(v / 10) / 100)} l`;
+  return `${formatarEscalada(v)} ${unidade}`;
+}
+/** Junta as linhas da lista: um item por ingrediente, com as quantidades somadas por unidade. */
+function juntarLista(linhas) {
+  const itens = new Map();
+  for (const x of linhas) {
+    const chave = chaveIngrediente(x.nome);
+    let it = itens.get(chave);
+    if (!it) { it = { chave, nomes: [], ids: [], linhas: [], somas: new Map(), receitas: [] }; itens.set(chave, it); }
+    it.nomes.push(nomeLimpo(x.nome)); it.ids.push(x.id); it.linhas.push(x);
+    if (x.receita_titulo && !it.receitas.includes(x.receita_titulo)) it.receitas.push(x.receita_titulo);
+    if (x.quantidade == null) continue;
+    const u = unidadePadrao(x.unidade) || 'un';
+    const fam = FAMILIAS_UNIDADE[u];
+    const balde = fam ? fam[0] : u;
+    const v = Number(x.quantidade) * (fam ? fam[1] : 1);
+    it.somas.set(balde, (it.somas.get(balde) || 0) + v);
+  }
+  return [...itens.values()].map(it => {
+    const nome = it.nomes.reduce((a, b) => (b.length < a.length ? b : a));
+    const partes = [...it.somas.entries()].map(([b, v]) => textoQuantidade(v, b === 'massa' ? 'g' : b === 'volume' ? 'ml' : b));
+    return { chave: it.chave, nome: nome.charAt(0).toUpperCase() + nome.slice(1), ids: it.ids, receitas: it.receitas,
+      quantidade: partes.join(' + '), marcado: it.linhas.every(l => l.marcado) };
+  }).sort((a, b) => (a.marcado - b.marcado) || a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
+}
+/** "2 kg arroz", "1/2 xícara de açúcar", "papel toalha": quantidade, unidade e nome. */
+function lerItemDigitado(texto) {
+  let t = String(texto || '').replace(/\s+/g, ' ').trim();
+  const m = t.match(/^((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d+(?:[.,]\d+)?)|[½⅓⅔¼¾])\s*(.*)$/);
+  let quantidade = null, unidade = null;
+  if (m) {
+    const q = lerQuantidade(m[1]);
+    if (q && !Number.isNaN(q)) { quantidade = q; t = m[2]; }
+    // Unidade: tenta as 3, 2 e 1 primeiras palavras ("colher de sopa", "xícara chá", "kg").
+    const palavras = t.split(' ');
+    for (let n = Math.min(4, palavras.length - 1); n >= 1; n--) {
+      const tentativa = palavras.slice(0, n).join(' ');
+      const u = unidadePadrao(tentativa);
+      if (u && UNIDADES.includes(u)) { unidade = u; t = palavras.slice(n).join(' ').replace(/^(de|do|da)\s+/i, ''); break; }
+    }
+  }
+  return { quantidade, unidade, nome: t.slice(0, 200) };
+}
+
+let listaCompras = null; // { linhas, pendentes: { id: marcado } } (cópia no aparelho)
+async function lerListaLocal() {
+  if (!listaCompras || listaCompras.usuario_id !== estado.usuario?.id) {
+    const l = await lerLocal('dados', chaveListaLocal());
+    listaCompras = l && l.usuario_id === estado.usuario?.id ? l : { usuario_id: estado.usuario?.id, linhas: [], pendentes: {} };
+  }
+  return listaCompras;
+}
+const guardarListaLocal = () => gravarLocal('dados', chaveListaLocal(), listaCompras);
+/** Envia as marcações feitas sem internet e lê a lista do Supabase. */
+async function carregarLista() {
+  const l = await lerListaLocal();
+  const pend = Object.entries(l.pendentes || {});
+  for (const valor of [true, false]) {
+    const ids = pend.filter(([, v]) => v === valor).map(([id]) => id);
+    if (!ids.length) continue;
+    const { error } = await sb.from('lista_compras').update({ marcado: valor }).in('id', ids);
+    if (error) throw error;
+  }
+  const { data, error } = await sb.from('lista_compras').select(CAMPOS_LISTA).order('criado_em');
+  if (error) throw error;
+  listaCompras = { usuario_id: estado.usuario.id, linhas: data || [], pendentes: {} };
+  await guardarListaLocal();
+  atualizarSeloCompras();
+  return listaCompras;
+}
+/** Quantos itens faltam comprar, no ícone 🛒 do topo. */
+function atualizarSeloCompras() {
+  let link = document.getElementById('link-compras');
+  if (!estado.titular || !estado.usuario) { link?.remove(); return; }
+  if (!link) {
+    link = el('a', { id: 'link-compras', class: 'botao-icone link-compras', href: '#/compras', title: 'Lista de compras' }, '🛒', el('span', { class: 'selo-compras', hidden: true }));
+    topo.querySelector('a[href="#/ajustes"]')?.before(link);
+  }
+  const faltam = listaCompras ? juntarLista(listaCompras.linhas).filter(i => !i.marcado).length : 0;
+  const selo = link.querySelector('.selo-compras');
+  selo.textContent = faltam > 99 ? '99+' : String(faltam);
+  selo.hidden = !faltam;
+  link.setAttribute('aria-label', faltam ? `Lista de compras: ${faltam} ${faltam === 1 ? 'item' : 'itens'} para comprar` : 'Lista de compras');
+}
+function atualizarListaPorTras() {
+  if (!estado.titular || estado.semConexao) return;
+  carregarLista().then(() => { if (location.hash === '#/compras' && !document.activeElement?.closest?.('.form-item-compra')) telaCompras(false); }).catch(() => { /* fica a cópia */ });
+}
+
+/** Botão da receita: põe os ingredientes na lista, na porção escolhida. */
+async function adicionarReceitaNaLista(r, fator, botao, aviso) {
+  if (estado.semConexao) { aviso.textContent = 'Precisa de internet para pôr na lista.'; return; }
+  const l = await lerListaLocal();
+  const ja = l.linhas.some(x => x.receita_id === r.id);
+  if (ja && !confirm(`"${r.titulo}" já está na lista de compras. Trocar pelos ingredientes desta porção?`)) return;
+  botao.disabled = true; aviso.textContent = 'Pondo na lista…';
+  const tres = v => Math.round(v * 1000) / 1000;
+  try {
+    if (ja) { const { error } = await sb.from('lista_compras').delete().eq('receita_id', r.id); if (error) throw error; }
+    const linhas = r.ingredientes.map(i => ({
+      receita_id: r.id, receita_titulo: r.titulo.slice(0, 200), fator: tres(fator), nome: i.nome,
+      quantidade: i.quantidade != null ? Math.max(0.001, tres(Number(i.quantidade) * fator)) : null,
+      unidade: unidadePadrao(i.unidade) || null }));
+    const { error } = await sb.from('lista_compras').insert(linhas);
+    if (error) throw error;
+    await carregarLista();
+    botao.textContent = '✓ Na lista de compras';
+    aviso.replaceChildren(`${linhas.length} ${linhas.length === 1 ? 'item' : 'itens'}${Math.abs(fator - 1) > 1e-9 ? ` (porção ${formatarNumero(tres(fator))}x)` : ''}. `,
+      el('a', { href: '#/compras' }, 'Ver lista'));
+  } catch (e) {
+    aviso.textContent = erroAmigavel(e);
+  } finally { botao.disabled = false; }
+}
+
+function textoDaLista(itens) {
+  const faltam = itens.filter(i => !i.marcado);
+  const linhas = ['*Lista de compras*', ''];
+  for (const i of faltam) linhas.push(`• ${i.nome}${i.quantidade ? `: ${i.quantidade}` : ''}`);
+  const receitas = [...new Set(listaCompras.linhas.filter(x => x.receita_titulo).map(x =>
+    x.receita_titulo + (x.fator && Math.abs(x.fator - 1) > 1e-9 ? ` (${formatarNumero(x.fator)}x)` : '')))];
+  if (receitas.length) linhas.push('', `Receitas: ${receitas.join(', ')}`);
+  linhas.push('', 'Enviada pelo app Receitas na mão');
+  return linhas.join('\n');
+}
+
+async function telaCompras(buscar = true) {
+  const l = await lerListaLocal();
+  const status = el('div', { class: 'status', role: 'status' });
+  const area = el('div');
+  const campo = el('input', { type: 'text', maxlength: 200, enterkeyhint: 'done', placeholder: 'Ex.: 2 kg arroz, papel toalha', 'aria-label': 'Item para adicionar' });
+  const botaoAdd = el('button', { class: 'botao principal', type: 'submit' }, 'Adicionar');
+  const form = el('form', { class: 'form-item-compra' }, campo, botaoAdd);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const item = lerItemDigitado(campo.value);
+    if (!item.nome) { status.textContent = 'Escreva o nome do item.'; return; }
+    if (estado.semConexao) { status.textContent = 'Precisa de internet para adicionar.'; return; }
+    botaoAdd.disabled = true;
+    const { error } = await sb.from('lista_compras').insert({ nome: item.nome, quantidade: item.quantidade, unidade: item.unidade });
+    botaoAdd.disabled = false;
+    if (error) { status.textContent = erroAmigavel(error); return; }
+    campo.value = '';
+    try { await carregarLista(); } catch (e) { status.textContent = erroAmigavel(e); }
+    desenhar(); campo.focus();
+  });
+
+  async function marcar(item) {
+    const novo = !item.marcado;
+    for (const x of listaCompras.linhas) if (item.ids.includes(x.id)) x.marcado = novo;
+    desenhar();
+    let erro = null;
+    if (!estado.semConexao) ({ error: erro } = await sb.from('lista_compras').update({ marcado: novo }).in('id', item.ids));
+    if (estado.semConexao || erro) { listaCompras.pendentes = listaCompras.pendentes || {}; for (const id of item.ids) listaCompras.pendentes[id] = novo; }
+    await guardarListaLocal();
+    atualizarSeloCompras();
+  }
+  async function apagar(filtro, pergunta, ok) {
+    if (estado.semConexao) { status.textContent = 'Precisa de internet para apagar.'; return; }
+    if (!confirm(pergunta)) return;
+    const { error } = await filtro(sb.from('lista_compras').delete());
+    if (error) { status.textContent = erroAmigavel(error); return; }
+    try { await carregarLista(); status.textContent = ok; } catch (e) { status.textContent = erroAmigavel(e); }
+    desenhar();
+  }
+
+  function desenhar() {
+    const itens = juntarLista(listaCompras.linhas);
+    const faltam = itens.filter(i => !i.marcado).length, marcados = itens.length - faltam;
+    const receitas = [];
+    for (const x of listaCompras.linhas) if (x.receita_id && !receitas.some(r => r.id === x.receita_id)) receitas.push({ id: x.receita_id, titulo: x.receita_titulo || 'Receita', fator: Number(x.fator) || 1 });
+    if (!itens.length) {
+      area.replaceChildren(el('p', { class: 'aviso', text: 'Lista vazia. Abra uma receita e toque em "🛒 Lista de compras", ou escreva um item acima.' }));
+      atualizarSeloCompras();
+      return;
+    }
+    area.replaceChildren(
+      el('p', { class: 'resumo-compras', text: `${faltam} para comprar${marcados ? ` · ${marcados} no carrinho` : ''}` }),
+      receitas.length ? el('div', { class: 'receitas-na-lista' }, receitas.map(r => el('span', { class: 'chip-receita' },
+        el('a', { href: `#/receita/${r.id}`, text: r.titulo + (Math.abs(r.fator - 1) > 1e-9 ? ` (${formatarNumero(r.fator)}x)` : '') }),
+        el('button', { class: 'chip-remover', type: 'button', 'aria-label': `Tirar ${r.titulo} da lista`, disabled: estado.semConexao,
+          onclick: () => apagar(q => q.eq('receita_id', r.id), `Tirar "${r.titulo}" da lista? Os itens dela saem; os outros ficam.`, `"${r.titulo}" saiu da lista.`) }, '✕')))) : null,
+      el('ul', { class: 'lista-compras' }, itens.map(i => el('li', {},
+        el('button', { class: 'item-compra' + (i.marcado ? ' feito' : ''), type: 'button', 'aria-pressed': i.marcado ? 'true' : 'false', onclick: () => marcar(i) },
+          el('span', { class: 'caixa-marcar', 'aria-hidden': 'true', text: i.marcado ? '✓' : '' }),
+          el('span', { class: 'item-compra-texto' },
+            el('span', { class: 'item-compra-nome', text: i.nome }),
+            i.receitas.length ? el('span', { class: 'item-compra-origem', text: i.receitas.join(', ') }) : null),
+          i.quantidade ? el('span', { class: 'item-compra-qtd', text: i.quantidade }) : null)))),
+      el('div', { class: 'acoes' },
+        el('button', { class: 'botao', type: 'button', onclick: async () => {
+          const texto = textoDaLista(itens);
+          if (navigator.share) { try { await navigator.share({ title: 'Lista de compras', text: texto }); return; } catch (e) { if (e?.name === 'AbortError') return; } }
+          window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+        } }, 'Compartilhar'),
+        el('button', { class: 'botao', type: 'button', onclick: async (ev) => {
+          const b = ev.currentTarget;
+          try { await navigator.clipboard.writeText(textoDaLista(itens)); b.textContent = 'Copiado ✓'; } catch { b.textContent = 'Não consegui copiar'; }
+          setTimeout(() => { b.textContent = 'Copiar texto'; }, 2500);
+        } }, 'Copiar texto'),
+        marcados ? el('button', { class: 'botao', type: 'button', disabled: estado.semConexao,
+          onclick: () => apagar(q => q.eq('marcado', true), `Apagar os ${marcados} ${marcados === 1 ? 'item marcado' : 'itens marcados'}?`, 'Marcados apagados.') }, `Apagar marcados (${marcados})`) : null,
+        el('button', { class: 'botao perigo', type: 'button', disabled: estado.semConexao,
+          onclick: () => apagar(q => q.eq('dono_id', estado.usuario.id), 'Limpar a lista de compras inteira?', 'Lista limpa.') }, 'Limpar lista')));
+    atualizarSeloCompras();
+  }
+
+  mostrar(el('section', { class: 'tela-compras' },
+    el('p', {}, el('a', { href: hashDaUltimaLista() }, '← Voltar')),
+    el('h1', { text: 'Lista de compras' }),
+    estado.semConexao ? el('p', { class: 'caixa-aviso', text: 'Sem internet: dá para consultar e riscar. As marcações vão para o Supabase quando a conexão voltar; adicionar e apagar precisam de internet.' }) : null,
+    form, status, area));
+  desenhar();
+  if (buscar && !estado.semConexao) {
+    try { await carregarLista(); if (location.hash === '#/compras') desenhar(); }
+    catch (e) { status.textContent = `Mostrando a cópia do aparelho. ${erroAmigavel(e)}`; }
+  }
+}
+
+// ---------------------------------------------------------------------
 // Navegação (rotas pelo trecho depois do # no endereço)
 // ---------------------------------------------------------------------
 
@@ -2524,9 +2817,10 @@ async function rotear() {
   }
   if (!estado.usuario) return telaLogin();
   topo.hidden = false;
+  if (listaCompras) atualizarSeloCompras(); else lerListaLocal().then(atualizarSeloCompras); // versão 22
   const rota = location.hash.replace(/^#/, '') || '/';
   const partes = rota.split('/').filter(Boolean);
-  if (!estado.titular && ['nova', 'manual', 'editar', 'revisar', 'categorias'].includes(partes[0])) {
+  if (!estado.titular && ['nova', 'manual', 'editar', 'revisar', 'categorias', 'compras'].includes(partes[0])) {
     return mostrar(el('section', {},
       el('p', {}, el('a', { href: '#/' }, '← Voltar')),
       el('h1', { text: 'Conta só de leitura' }),
@@ -2550,6 +2844,7 @@ async function rotear() {
     if (partes[0] === 'revisar') return await telaRevisao();
     if (partes[0] === 'ajustes') return telaAjustes();
     if (partes[0] === 'categorias') return await telaCategorias();
+    if (partes[0] === 'compras') return await telaCompras();
     return await telaLista(null);
   } catch (e) {
     mensagem(erroAmigavel(e), 'erro');
@@ -2876,6 +3171,7 @@ async function tentarReconectar() {
     await comLimite(atualizarColecao(), 15000);
     mostrarFaixa();
     if (/^#(\/(categoria\/[\w-]+)?)?$/.test(location.hash) || location.hash.startsWith('#/receita/')) rotear();
+    atualizarListaPorTras(); // versão 22: envia as marcações feitas sem internet
   } catch { /* continua com a cópia */ }
 }
 

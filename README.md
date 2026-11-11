@@ -27,6 +27,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/11-foto-nos-passos.sql` | Foto em cada passo do preparo (`passos.imagem_caminho`), até 30 por receita, só na pasta do próprio usuário |
 | `supabase/12-fotos-no-backup.sql` | Função `backup_fotos`: confere a chave de backup e lista as fotos em uso (versão 21) |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que lê o link (site, YouTube, TikTok, Instagram) e envia link, legenda, imagens e áudio ao Gemini, devolvendo a receita |
+| `supabase/13-lista-de-compras.sql` | Tabela `lista_compras` (versão 22): só o titular lê e grava a própria lista; só marcar/desmarcar pode ser alterado; até 1.000 itens |
 | `supabase/functions/fotos-backup/index.ts` | Edge Function do backup: links de 5 minutos para baixar só as fotos em uso, só com a chave de backup (versão 21) |
 | `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta, com as fotos novas (versão 21) e montagem dos arquivos de restauração com fotos |
 
@@ -38,6 +39,7 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 - Só o titular grava (RLS, script 09). Contas de amigos e família autorizadas em Ajustes só leem; a função da IA recusa essas contas.
 - A chave do Gemini fica só no segredo `GEMINI_API_KEY` do Supabase; a função só aceita o endereço do app e usuário logado, com limite de 50 importações por dia (150 até 31/01/2027, para a migração do Instagram).
 - Links importados: a função só baixa endereços públicos (http/https, portas padrão, nada de rede interna, conferido a cada redirecionamento), com limite de tamanho e de tempo.
+- Lista de compras (versão 22): RLS forçada como nas receitas; contas de leitura não veem nem criam lista; uma receita só entra na lista do próprio dono (chave composta) e excluir a receita tira os itens dela. A lista não entra no backup (é temporária).
 - Sem internet: a cópia das receitas fica só no aparelho de quem está logado (IndexedDB) e é apagada ao tocar em Sair.
 - Todo texto de receita é exibido com `textContent`, nunca com `innerHTML` (proteção contra XSS). Links da fonte só `http` ou `https`.
 - CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe. Quadros (iframe) só dos players oficiais do YouTube (sem cookies), do Instagram e do TikTok, carregados só ao tocar em "Ver vídeo", isolados (sandbox) e recebendo só a origem do app (versão 17).

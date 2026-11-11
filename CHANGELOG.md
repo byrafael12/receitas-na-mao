@@ -1,5 +1,19 @@
 # Histórico de versões
 
+## Versão 22 (11/11/2026): lista de compras e unidades padrão
+
+- **Lista de compras (IMP-008)**: na receita, **🛒 Lista de compras** põe os ingredientes na lista na porção escolhida (8 porções de uma receita de 4 = tudo em dobro). Pôr de novo pergunta e troca, sem duplicar. O ícone 🛒 no topo mostra quantos itens faltam.
+  - Na tela da lista, ingredientes iguais de receitas diferentes são somados: 400 g + 1 kg de açúcar = 1,4 kg; 500 ml + 1 l de leite = 1,5 l; "ovos" + "Ovos grandes" = 8 un; "cebolas picadas" junta com "cebola". Cada item mostra de quais receitas veio.
+  - Tocar risca (vai para o fim). **Adicionar** aceita item digitado ("2 kg arroz", "papel toalha"). **Compartilhar** e **Copiar texto** mandam só o que falta comprar, com as receitas. **Apagar marcados**, **✕** em cada receita (tira só os itens dela) e **Limpar lista**.
+  - Sem internet: dá para consultar e riscar. A marcação fica no aparelho e vai para o Supabase quando a conexão volta.
+  - Só para o titular; contas de leitura não veem.
+- **Unidades padrão (IMP-011, auditoria AUD-010)**: lista de 27 unidades (g, kg, ml, l, xícara (chá), colher (sopa), colher (sobremesa), colher (chá), copo, pitada, un, dente, gomo, fatia, folha, ramo, maço, lata, caixa, pacote, vidro, sachê, tablete, barra, rolo, pedaço, punhado).
+  - A IA recebe a lista, e a função corrige o que vier fora dela: "colheres de sopa", "colher sopa" e "cs" viram "colher (sopa)"; "unidades" vira "un"; "a gosto" fica sem unidade. Unidade fora da lista vai para o nome ("1 bisnaga de maionese").
+  - No formulário, o campo Unidade sugere a lista, e ao salvar o sinônimo vira a forma padrão. Unidade escrita fora da lista é aceita como está.
+  - Receitas antigas não mudam sozinhas: só quando você edita e salva. A lista de compras padroniza na hora de somar.
+- **Script 13** (tabela `lista_compras`) e **Deploy** da função `importar-receita`.
+- Testes locais: versão 22 48 de 48, SQL 13 26 de 26, função da IA 90 de 90 (8 novos de unidades). Regressão: versão 21 17 de 17, versão 20 36 de 36, versão 19 49 de 49, versão 18 54 de 54, versão 17 39 de 39, extensão 27 de 27, importação 47 de 47, cadastro 25 de 25, lista 32 de 32, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, áudio 7 de 7.
+
 ## Versão 21 (11/11/2026): fotos no backup automático do Drive
 
 - **Fotos no backup automático (IMP-005, auditoria de 10/11)**: além do JSON das receitas, cada rodada de segunda e quinta copia para a subpasta **fotos** (Backups > Receitas na mão) só as fotos novas: capas e fotos dos passos. Foto já copiada não é baixada de novo; foto que saiu do app continua no Drive (nada é apagado ali). Se a rodada passar de 4 minutos, o resto fica para a próxima.
