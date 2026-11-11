@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '20';
+const VERSAO = '21';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -2733,11 +2733,11 @@ function secaoBackup() {
   });
   return el('div', {},
     el('h2', { text: 'Backup' }),
-    el('p', { class: 'ajuda', text: 'Além do backup automático no Drive (segunda e quinta), você pode baixar um arquivo agora. Com fotos, fica maior (cerca de 15 MB a cada 100 receitas).' }),
+    el('p', { class: 'ajuda', text: 'Além do backup automático no Drive (segunda e quinta, com as fotos), você pode baixar um arquivo agora. Com fotos, fica maior (cerca de 15 MB a cada 100 receitas).' }),
     el('label', { class: 'opcao' }, comFotos, ' Incluir as fotos'),
     el('div', { class: 'acoes' }, baixar),
     el('h3', { text: 'Restaurar' }),
-    el('p', { class: 'ajuda', text: estado.semConexao ? 'Precisa de internet para restaurar.' : 'Escolha um backup baixado pelo app ou do Drive (Backups > Receitas na mão). Só volta o que estiver faltando: nada é apagado nem substituído.' }),
+    el('p', { class: 'ajuda', text: estado.semConexao ? 'Precisa de internet para restaurar.' : 'Escolha um backup baixado pelo app ou do Drive (Backups > Receitas na mão). Para voltar com as fotos do Drive, use os arquivos "restaurar-com-fotos" da subpasta restauracao, um de cada vez. Só volta o que estiver faltando: nada é apagado nem substituído.' }),
     arquivo, confirmar, status);
 }
 

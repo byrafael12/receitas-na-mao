@@ -1,5 +1,14 @@
 # Histórico de versões
 
+## Versão 21 (11/11/2026): fotos no backup automático do Drive
+
+- **Fotos no backup automático (IMP-005, auditoria de 10/11)**: além do JSON das receitas, cada rodada de segunda e quinta copia para a subpasta **fotos** (Backups > Receitas na mão) só as fotos novas: capas e fotos dos passos. Foto já copiada não é baixada de novo; foto que saiu do app continua no Drive (nada é apagado ali). Se a rodada passar de 4 minutos, o resto fica para a próxima.
+- **Função nova `fotos-backup` (Edge Function)** e **script 12** (`backup_fotos`): o Apps Script pede links de 5 minutos para baixar as fotos. A função só responde com a chave de backup certa e só para fotos em uso. O Apps Script continua sem nenhuma chave secreta.
+- **Restaurar com fotos do Drive**: a função `montarRestauracaoComFotos` (rodar à mão no Apps Script, só quando precisar) junta o backup mais recente com as fotos em arquivos **restaurar-com-fotos-...-parte-N-de-M.json** (até 20 MB cada), na subpasta **restauracao**. Cada parte leva um grupo de receitas completo e é restaurada em Ajustes > Restaurar, uma de cada vez, em qualquer ordem. O app não mudou a restauração: só o texto de ajuda.
+- **E-mails**: falha nas fotos avisa sempre ("backup salvo, FOTOS com problema"), mesmo com o JSON salvo. O resumo informa fotos em uso, copiadas, pendentes e com falha.
+- App: versão 21 só com textos de Ajustes > Backup. Sem mudança na função da IA.
+- Testes locais: Apps Script 44 de 44 (Apps Script falso + função real em Deno), função fotos-backup 24 de 24, SQL 12 14 de 14, restauração das partes pelo app 17 de 17; regressão: versão 20 36 de 36, versão 19 49 de 49, versão 18 54 de 54, versão 17 39 de 39, extensão 27 de 27, importação 47 de 47, cadastro 25 de 25, lista 32 de 32, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, áudio 7 de 7.
+
 ## Versão 20 (11/11/2026): categorias vazias ocultas, ordenar e filtrar por etiqueta
 
 - **Categorias vazias ocultas (IMP-016, pedido de Rafael)**: a tela inicial mostra só Todas, ★ Favoritas (se houver), as categorias com receitas e Sem categoria (se houver). A categoria aparece sozinha quando recebe a 1ª receita. Em Ajustes > Editar categorias continuam todas.

@@ -12,7 +12,6 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `app.js` | Lógica do app: login Google, lista, receita, formulário |
 | `styles.css` | Aparência (tema claro e escuro automáticos) |
 | `service-worker.js` | Guarda os arquivos do app no aparelho para abrir sem internet (versão 10) |
-| `sw.js` | "Desligador" do service worker enviado por engano em 01/11/2026; apagar a partir de 09/11/2026 |
 | `manifest.webmanifest` e `icones/` | Atalho na tela de início do iPhone |
 | `lib/supabase.js` | Biblioteca supabase-js 2.119.0 servida pelo próprio site (sem CDN), licença MIT em `lib/LICENSE-supabase-js.txt` |
 | `supabase/01-tabelas-e-seguranca.sql` | Tabelas, RLS forçada, função `salvar_receita`, pasta de imagens `capas` |
@@ -26,8 +25,10 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 | `supabase/09-compartilhar-leitura.sql` | Titular grava; amigos e família autorizados (tabela `leitores`) só leem |
 | `supabase/10-favoritas-e-categorias.sql` | Favorita não muda a data da receita; função `remover_categoria` (move receitas para Outras) |
 | `supabase/11-foto-nos-passos.sql` | Foto em cada passo do preparo (`passos.imagem_caminho`), até 30 por receita, só na pasta do próprio usuário |
+| `supabase/12-fotos-no-backup.sql` | Função `backup_fotos`: confere a chave de backup e lista as fotos em uso (versão 21) |
 | `supabase/functions/importar-receita/index.ts` | Edge Function que lê o link (site, YouTube, TikTok, Instagram) e envia link, legenda, imagens e áudio ao Gemini, devolvendo a receita |
-| `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta |
+| `supabase/functions/fotos-backup/index.ts` | Edge Function do backup: links de 5 minutos para baixar só as fotos em uso, só com a chave de backup (versão 21) |
+| `backup-drive/Codigo.gs` | Backup automático no Google Drive (Apps Script), segunda e quinta, com as fotos novas (versão 21) e montagem dos arquivos de restauração com fotos |
 
 ## Segurança
 
@@ -41,7 +42,8 @@ Endereço: https://byrafael12.github.io/receitas-na-mao/
 - Todo texto de receita é exibido com `textContent`, nunca com `innerHTML` (proteção contra XSS). Links da fonte só `http` ou `https`.
 - CSP permite scripts só do próprio site e conexões só com o Supabase; o app não abre dentro de iframe. Quadros (iframe) só dos players oficiais do YouTube (sem cookies), do Instagram e do TikTok, carregados só ao tocar em "Ver vídeo", isolados (sandbox) e recebendo só a origem do app (versão 17).
 - Extensão do Chrome (versão 16, fica fora deste repositório, na pasta `extensao-chrome` do projeto): o app só aceita da extensão mensagens da própria página, com link do Instagram, legenda e foto conferidos.
-- O backup usa uma função que só lê e só responde a uma chave própria (guardada nas Propriedades do Apps Script); o banco guarda apenas o hash dela. A chave `service_role` não é usada.
+- O backup usa uma função que só lê e só responde a uma chave própria (guardada nas Propriedades do Apps Script); o banco guarda apenas o hash dela. O Apps Script não tem nenhuma chave secreta do Supabase.
+- Fotos no backup (versão 21): a função `fotos-backup` não tem login de usuário (Verify JWT desligado), por isso ela mesma confere a chave de backup no banco antes de tudo. Só gera links temporários (5 minutos) para fotos em uso. A chave secreta que gera os links é colocada pelo próprio Supabase dentro da função e não está no código nem no Apps Script.
 
 ## Versão
 
