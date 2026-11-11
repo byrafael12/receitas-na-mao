@@ -1,5 +1,16 @@
 # Histórico de versões
 
+## Versão 20 (11/11/2026): categorias vazias ocultas, ordenar e filtrar por etiqueta
+
+- **Categorias vazias ocultas (IMP-016, pedido de Rafael)**: a tela inicial mostra só Todas, ★ Favoritas (se houver), as categorias com receitas e Sem categoria (se houver). A categoria aparece sozinha quando recebe a 1ª receita. Em Ajustes > Editar categorias continuam todas.
+- **Ordenar (IMP-009)**: na lista de cada categoria e na busca da tela inicial, **Ordenar**: Mais recentes, A a Z (sem ligar para acento) ou Menor tempo (receitas sem tempo vão para o fim). A escolha fica lembrada.
+- **Filtrar por etiqueta (IMP-009)**: abaixo da busca, as etiquetas das receitas da tela viram botões. Tocar filtra; com duas ou mais, só as receitas que têm todas; **✕ Limpar** tira o filtro. Funciona junto com a busca, vale para cada categoria e continua ao voltar da receita.
+- **Biblioteca do Supabase 2.119.0 (IMP-012)** no app (`lib/supabase.js`), 0 vulnerabilidades. A função da IA continua na 2.118.0 (não precisa de novo Deploy).
+- **Timers dizem de qual passo são (ajuste do aceite da versão 19, pedido de Rafael)**: cada timer do painel mostra **Passo N · grupo** (ex.: "Passo 2 · Molho") e o começo do texto do passo; com timers de receitas diferentes, também o nome da receita. O botão ⏱ do passo mostra o tempo que falta enquanto o timer corre (e não cria outro se tocado de novo). Painel mais compacto ("+1" no lugar de "+1 min") e limitado a 38% da tela, com rolagem quando há muitos timers.
+- **Limpeza (IMP-013)**: saiu do app o trecho que desligava o `sw.js` do incidente de 01/11 (apagado em 09/11).
+- Sem SQL e sem mudança na função da IA.
+- Testes locais: versão 20 36 de 36, versão 19 49 de 49, versão 18 54 de 54, extensão 27 de 27, importação 47 de 47, cadastro 25 de 25, lista 32 de 32, sem internet 17 de 17, compartilhar 21 de 21, cozinha 21 de 21, versão 13 31 de 31, backup 22 de 22, login 7 de 7, versão 17 39 de 39, áudio 7 de 7.
+
 ## Versão 19 (10/11/2026): tela inicial por categorias, modo cozinha e timers
 
 - **Tela inicial por categorias (IMP-015, pedido de Rafael)**: um quadro por categoria, com a foto da receita mais recente e a quantidade ("11 receitas"). Primeiro **Todas** e **★ Favoritas** (só quando há favoritas), depois as categorias com receitas (A a Z), **Sem categoria** (se houver) e, no fim, as vazias. Saiu a barra de abas. A busca da tela inicial procura em todas e mostra as receitas encontradas; limpando, voltam os quadros. Tocar num quadro abre a lista da categoria (com busca só dentro dela, grade/lista e "← Categorias"). "← Voltar" da receita leva à categoria de onde você veio, no mesmo lugar.

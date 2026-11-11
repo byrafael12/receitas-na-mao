@@ -22,7 +22,7 @@ if (window.top !== window.self) {
 // Configuração (valores PÚBLICOS por definição; a chave secreta nunca
 // entra no código).
 // ---------------------------------------------------------------------
-const VERSAO = '19';
+const VERSAO = '20';
 const SUPABASE_URL = 'https://dmvjlirobozpmkusnnez.supabase.co';
 const SUPABASE_CHAVE_PUBLICA = 'sb_publishable_MpRgJ6E0Ghhi-CcFsymGKA_l6IrlYa5';
 const PASTA_IMAGENS = 'capas';
@@ -672,6 +672,29 @@ async function telaLista(filtro = null) {
   const botoesVisao = el('div', { class: 'alternar-visao', role: 'group', 'aria-label': 'Visão' });
   const area = el('div');
 
+  // Versão 20 (IMP-009): ordenar (lembrado) e filtrar por etiquetas (vale enquanto o app está aberto).
+  const etiquetasDe = new Map(data.map(r => [r.id, new Set()]));
+  for (const x of c.receita_etiquetas) { const n = nomeEtiqueta.get(x.etiqueta_id); if (n) etiquetasDe.get(x.receita_id)?.add(n); }
+  let ordem = lerPreferencia('ordem', 'recentes');
+  if (!['recentes', 'az', 'tempo'].includes(ordem)) ordem = 'recentes';
+  estado.etiquetasEscolhidas = estado.etiquetasEscolhidas || {};
+  const escolhidas = new Set(estado.etiquetasEscolhidas[chaveBusca] || []);
+  const seletorOrdem = el('select', { class: 'seletor-ordem', 'aria-label': 'Ordenar receitas' },
+    el('option', { value: 'recentes', text: 'Mais recentes', selected: ordem === 'recentes' }),
+    el('option', { value: 'az', text: 'A a Z', selected: ordem === 'az' }),
+    el('option', { value: 'tempo', text: 'Menor tempo', selected: ordem === 'tempo' }));
+  seletorOrdem.addEventListener('change', () => { ordem = seletorOrdem.value; gravarPreferencia('ordem', ordem); desenhar(); });
+  const barraEtiquetas = el('div', { class: 'filtro-etiquetas', role: 'group', 'aria-label': 'Filtrar por etiqueta' });
+  const controles = el('div', { class: 'controles-lista' }, el('label', { class: 'rotulo-ordem' }, el('span', { text: 'Ordenar' }), seletorOrdem), botoesVisao);
+  function ordenar(lista) {
+    if (ordem === 'az') return [...lista].sort((a, b) => a.titulo.localeCompare(b.titulo, 'pt-BR', { sensitivity: 'base' }));
+    if (ordem === 'tempo') {
+      const tempo = r => r.tempo_preparo_min ?? r.tempo_total_min ?? Infinity; // sem tempo vai para o fim
+      return [...lista].sort((a, b) => tempo(a) - tempo(b));
+    }
+    return lista; // a coleção já vem da mais recente para a mais antiga
+  }
+
   function itemGrade(r) {
     return el('a', { class: 'cartao', href: `#/receita/${r.id}` },
       elementoCapa(urls[r.imagem_caminho], ''),
@@ -692,11 +715,11 @@ async function telaLista(filtro = null) {
   function quadros() {
     const lista = [{ id: 'todas' }];
     if (data.some(ehFavorita)) lista.push({ id: 'favoritas' });
-    // Categorias com receitas primeiro (em ordem alfabética); as vazias vão para o fim.
+    // Só as categorias com receitas, em ordem alfabética (Outras por último).
     const usadas = new Set(data.map(r => r.categoria_id));
     for (const cat of estado.categorias) if (usadas.has(cat.id)) lista.push({ id: cat.id });
     if (usadas.has(null) || usadas.has(undefined)) lista.push({ id: 'sem' });
-    for (const cat of estado.categorias) if (!usadas.has(cat.id) && cat.ativa) lista.push({ id: cat.id });
+    // Versão 20 (pedido de Rafael): categoria vazia fica oculta; aparece com a 1ª receita.
     return el('div', { class: 'quadros' }, lista.map(({ id }) => {
       const delas = data.filter(r => noFiltro(r, id)); // já vêm da mais recente para a mais antiga
       const comFoto = delas.find(r => r.imagem_caminho && urls[r.imagem_caminho]);
@@ -716,17 +739,27 @@ async function telaLista(filtro = null) {
     // Busca: todas as palavras digitadas precisam aparecer (em qualquer campo).
     const palavras = normalizar(estado.buscaLista.texto).split(/\s+/).filter(Boolean);
     const daTela = inicio ? data : data.filter(r => noFiltro(r, filtro));
-    const visiveis = palavras.length ? daTela.filter(r => palavras.every(p => textoBusca.get(r.id).includes(p))) : daTela;
+    let visiveis = palavras.length ? daTela.filter(r => palavras.every(p => textoBusca.get(r.id).includes(p))) : daTela;
 
     if (inicio && !palavras.length) {
       titulo.textContent = `Minhas receitas (${data.length})`;
-      botoesVisao.hidden = true;
+      controles.hidden = true; barraEtiquetas.hidden = true;
       area.replaceChildren(quadros());
       return;
     }
+    controles.hidden = false;
+    // Etiquetas das receitas desta tela (busca já aplicada): todas as escolhidas precisam estar na receita.
+    const disponiveis = [...new Set(visiveis.flatMap(r => [...etiquetasDe.get(r.id)]).concat([...escolhidas]))]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+    barraEtiquetas.hidden = !disponiveis.length;
+    barraEtiquetas.replaceChildren(...[...disponiveis.map(n => el('button', {
+      class: 'etiqueta-filtro' + (escolhidas.has(n) ? ' ativa' : ''), type: 'button', 'aria-pressed': escolhidas.has(n) ? 'true' : 'false',
+      onclick: () => { if (escolhidas.has(n)) escolhidas.delete(n); else escolhidas.add(n); estado.etiquetasEscolhidas[chaveBusca] = [...escolhidas]; desenhar(); }
+    }, n)), escolhidas.size ? el('button', { class: 'etiqueta-filtro limpar', type: 'button',
+      onclick: () => { escolhidas.clear(); estado.etiquetasEscolhidas[chaveBusca] = []; desenhar(); } }, '✕ Limpar') : null].filter(Boolean));
+    visiveis = ordenar(visiveis.filter(r => [...escolhidas].every(n => etiquetasDe.get(r.id).has(n))));
     titulo.textContent = inicio ? `Encontradas (${visiveis.length})`
       : `${nomeDoFiltro(filtro)} (${visiveis.length})`;
-    botoesVisao.hidden = false;
     botoesVisao.replaceChildren(
       el('button', { class: 'botao pequeno' + (visao === 'grade' ? ' selecionado' : ''), type: 'button', 'aria-pressed': visao === 'grade' ? 'true' : 'false',
         onclick: () => { visao = 'grade'; gravarPreferencia('visao', visao); desenhar(); } }, '▦ Grade'),
@@ -734,8 +767,8 @@ async function telaLista(filtro = null) {
         onclick: () => { visao = 'lista'; gravarPreferencia('visao', visao); desenhar(); } }, '☰ Lista'));
     if (!visiveis.length) {
       area.replaceChildren(el('p', { class: 'aviso', text: palavras.length
-        ? `Nenhuma receita com "${estado.buscaLista.texto.trim()}"${inicio ? '' : ' nesta categoria'}.`
-        : 'Nenhuma receita nesta categoria.' }));
+        ? `Nenhuma receita com "${estado.buscaLista.texto.trim()}"${inicio ? '' : ' nesta categoria'}${escolhidas.size ? ' e as etiquetas escolhidas' : ''}.`
+        : escolhidas.size ? 'Nenhuma receita com todas as etiquetas escolhidas.' : 'Nenhuma receita nesta categoria.' }));
     } else {
       area.replaceChildren(visao === 'lista'
         ? el('div', { class: 'lista' }, visiveis.map(itemLista))
@@ -747,7 +780,7 @@ async function telaLista(filtro = null) {
   const posicao = estado.rolagem[chaveRolagem] || 0;
   mostrar(
     inicio ? null : el('p', {}, el('a', { href: '#/' }, '← Categorias')),
-    cabecalho, avisoRevisaoPendente(), campoBusca, botoesVisao, area);
+    cabecalho, avisoRevisaoPendente(), campoBusca, controles, barraEtiquetas, area);
   desenhar();
   // Volta ao ponto em que esta tela estava (versão 18; uma posição por tela na versão 19).
   window.scrollTo(0, posicao);
@@ -944,7 +977,7 @@ async function telaReceita(id) {
     (r.utensilios || []).length ? el('ul', { class: 'utensilios' }, r.utensilios.map(u => el('li', { text: u }))) : null,
     el('h2', { text: 'Modo de preparo' }),
     blocoVideo(r.fonte_url),
-    r.passos.length ? passosAgrupados(r.passos, urls, r.titulo) : el('p', { class: 'aviso', text: 'Sem passos.' }),
+    r.passos.length ? passosAgrupados(r.passos, urls, { receitaId: r.id, receita: r.titulo }) : el('p', { class: 'aviso', text: 'Sem passos.' }),
     r.observacoes ? el('h2', { text: 'Observações' }) : null,
     r.observacoes ? el('p', { class: 'observacoes', text: r.observacoes }) : null,
     fonte,
@@ -1037,14 +1070,35 @@ function temposNoTexto(texto) {
   }
   return achados.slice(0, 3);
 }
-function botoesTimer(texto, rotulo) {
-  if (!rotulo) return null;
+/** Botões de timer de um passo. "info": { receitaId, receita, passo (número), grupo, texto }.
+ *  Versão 20 (aceite da 19): o timer guarda de qual passo é; o botão do passo mostra o tempo correndo. */
+function botoesTimer(texto, info) {
+  if (!info) return null;
   const tempos = temposNoTexto(texto);
   if (!tempos.length) return null;
-  return el('span', { class: 'timers-passo' }, tempos.map(s => el('button', {
-    class: 'timer-botao', type: 'button', 'aria-label': `Iniciar timer de ${textoDuracao(s)}`,
-    onclick: (ev) => { ev.stopPropagation(); iniciarTimer(s, rotulo); }
+  const botoes = el('span', { class: 'timers-passo' }, tempos.map(s => el('button', {
+    class: 'timer-botao', type: 'button', 'data-chave': `${info.receitaId}|${info.passo}|${s}`, 'data-duracao': textoDuracao(s),
+    'aria-label': `Iniciar timer de ${textoDuracao(s)} do passo ${info.passo}`,
+    onclick: (ev) => {
+      ev.stopPropagation();
+      if (ev.currentTarget.classList.contains('rodando')) return; // já está correndo: não duplica
+      iniciarTimer(s, { ...info, texto });
+    }
   }, `⏱ ${textoDuracao(s)}`)));
+  queueMicrotask(atualizarBotoesTimer);
+  return botoes;
+}
+const chaveTimer = (x) => `${x.receitaId}|${x.passo}|${x.total}`;
+/** Botões dos passos com timer correndo mostram o tempo que falta. */
+function atualizarBotoesTimer() {
+  for (const b of document.querySelectorAll('.timer-botao[data-chave]')) {
+    const x = timers.find(y => y.receitaId && chaveTimer(y) === b.dataset.chave);
+    const s = x ? restante(x) : null;
+    const texto = !x ? `⏱ ${b.dataset.duracao}` : (s === 0 && x.pausadoRestante == null ? '⏱ Pronto!' : `⏱ ${relogio(s)}${x.pausadoRestante != null ? ' (pausado)' : ''}`);
+    if (b.textContent !== texto) b.textContent = texto;
+    b.classList.toggle('rodando', !!x);
+    b.setAttribute('aria-label', x ? `Timer do passo ${x.passo} correndo: ${texto.slice(2)}` : `Iniciar timer de ${b.dataset.duracao}`);
+  }
 }
 
 const CHAVE_TIMERS = 'receitas.timers';
@@ -1084,9 +1138,14 @@ function tocarAlarme() {
 }
 function pararAlarme() { clearInterval(somAlarme); somAlarme = null; document.title = 'Receitas na mão'; }
 
-function iniciarTimer(segundos, rotulo) {
+function iniciarTimer(segundos, info) {
   prepararSom();
-  timers.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), rotulo: rotulo.slice(0, 120), total: segundos, fim: Date.now() + segundos * 1000, pausadoRestante: null, avisado: false });
+  const i = typeof info === 'string' ? { rotulo: info } : info;
+  timers.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    receitaId: i.receitaId || null, receita: String(i.receita || '').slice(0, 80), passo: i.passo || null, grupo: i.grupo ? String(i.grupo).slice(0, 40) : null,
+    trecho: String(i.texto || '').slice(0, 90),
+    rotulo: (i.rotulo || `${i.receita}, passo ${i.passo}`).slice(0, 120),
+    total: segundos, fim: Date.now() + segundos * 1000, pausadoRestante: null, avisado: false });
   gravarTimers();
   desenharTimers();
 }
@@ -1095,22 +1154,27 @@ function desenharTimers() {
     painelTimers = el('section', { class: 'painel-timers', 'aria-label': 'Timers' });
     document.body.append(painelTimers);
   }
-  if (!timers.length) { painelTimers.hidden = true; painelTimers.replaceChildren(); clearInterval(relogioTimers); relogioTimers = null; pararAlarme(); document.body.style.paddingBottom = ''; document.documentElement.style.removeProperty('--altura-timers'); return; }
+  if (!timers.length) { atualizarBotoesTimer(); painelTimers.hidden = true; painelTimers.replaceChildren(); clearInterval(relogioTimers); relogioTimers = null; pararAlarme(); document.body.style.paddingBottom = ''; document.documentElement.style.removeProperty('--altura-timers'); return; }
   painelTimers.hidden = false;
   let algumTocando = false;
+  const variasReceitas = new Set(timers.map(x => x.receita || x.rotulo)).size > 1;
   painelTimers.replaceChildren(...timers.map(x => {
     const s = restante(x);
     const acabou = s === 0 && x.pausadoRestante == null;
     if (acabou) { algumTocando = true; if (!x.avisado) { x.avisado = true; gravarTimers(); } }
     return el('div', { class: 'timer' + (acabou ? ' acabou' : ''), role: acabou ? 'alert' : null },
-      el('div', { class: 'timer-texto' },
-        el('span', { class: 'timer-relogio', text: acabou ? 'Pronto!' : relogio(s) }),
-        el('span', { class: 'timer-rotulo', text: x.rotulo })),
+      el('div', { class: 'timer-texto', title: x.trecho ? `${x.receita}, passo ${x.passo}: ${x.trecho}` : x.rotulo },
+        el('span', { class: 'timer-linha' },
+          el('span', { class: 'timer-relogio', text: acabou ? 'Pronto!' : relogio(s) }),
+          x.passo ? el('span', { class: 'timer-passo', text: `Passo ${x.passo}${x.grupo ? ' · ' + x.grupo : ''}` }) : null),
+        el('span', { class: 'timer-rotulo', text: x.trecho
+          ? (variasReceitas ? `${x.receita}: ${x.trecho}` : x.trecho)
+          : x.rotulo })),
       acabou ? null : el('button', { class: 'botao pequeno', type: 'button', 'aria-label': x.pausadoRestante != null ? 'Continuar timer' : 'Pausar timer',
         onclick: () => { if (x.pausadoRestante != null) { x.fim = Date.now() + x.pausadoRestante * 1000; x.pausadoRestante = null; } else x.pausadoRestante = restante(x); gravarTimers(); desenharTimers(); } },
         x.pausadoRestante != null ? '▶ Seguir' : 'Pausar'),
       acabou ? null : el('button', { class: 'botao pequeno', type: 'button', 'aria-label': 'Mais 1 minuto',
-        onclick: () => { if (x.pausadoRestante != null) x.pausadoRestante += 60; else x.fim += 60000; gravarTimers(); desenharTimers(); } }, '+1 min'),
+        onclick: () => { if (x.pausadoRestante != null) x.pausadoRestante += 60; else x.fim += 60000; gravarTimers(); desenharTimers(); } }, '+1'),
       el('button', { class: 'botao pequeno' + (acabou ? ' principal' : ''), type: 'button', 'aria-label': acabou ? 'Parar alarme' : 'Cancelar timer',
         onclick: () => { timers = timers.filter(y => y !== x); gravarTimers(); if (!timers.some(y => restante(y) === 0 && y.pausadoRestante == null)) pararAlarme(); desenharTimers(); } },
         acabou ? 'Parar' : '✕'));
@@ -1119,6 +1183,7 @@ function desenharTimers() {
   // O painel não cobre o fim da tela nem os botões do modo cozinha.
   document.documentElement.style.setProperty('--altura-timers', `${painelTimers.offsetHeight + 8}px`);
   document.body.style.paddingBottom = `calc(${painelTimers.offsetHeight + 8}px + env(safe-area-inset-bottom))`;
+  atualizarBotoesTimer();
   if (!relogioTimers) relogioTimers = setInterval(desenharTimers, 1000);
 }
 if (timers.length) desenharTimers();
@@ -1174,7 +1239,7 @@ async function telaCozinha(id) {
     grupo.textContent = p.grupo || '';
     grupo.hidden = !p.grupo;
     texto.textContent = p.texto;
-    timersDoPasso.replaceChildren(botoesTimer(p.texto, `${r.titulo}, passo ${n + 1}`) || '');
+    timersDoPasso.replaceChildren(botoesTimer(p.texto, { receitaId: r.id, receita: r.titulo, passo: n + 1, grupo: p.grupo }) || '');
     const url = p.imagem_caminho ? urls[p.imagem_caminho] : null;
     foto.replaceChildren(url ? el('img', { src: url, alt: `Foto do passo ${n + 1}` }) : '');
     foto.hidden = !url;
@@ -1775,7 +1840,7 @@ function passosAgrupados(passos, urls = {}, rotuloTimer = null) {
       const url = p.imagem_caminho ? urls[p.imagem_caminho] : null;
       return el('li', { class: 'marcavel', onclick: (ev) => ev.currentTarget.classList.toggle('feito') },
         el('span', { class: 'texto-passo', text: p.texto }),
-        botoesTimer(p.texto, rotuloTimer ? `${rotuloTimer}, passo ${numero + b.itens.indexOf(p)}` : null),
+        botoesTimer(p.texto, rotuloTimer ? { ...rotuloTimer, passo: numero + b.itens.indexOf(p), grupo: p.grupo } : null),
         url ? el('img', { class: 'foto-passo', src: url, alt: `Foto do passo: ${p.texto.slice(0, 80)}`, loading: 'lazy' }) : null);
     }));
     numero += b.itens.length;
@@ -2787,10 +2852,7 @@ function secaoLeitores() {
 async function registrarServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
-    for (const r of await navigator.serviceWorker.getRegistrations()) {
-      const script = (r.active || r.waiting || r.installing)?.scriptURL || '';
-      if (script.endsWith('/sw.js')) await r.unregister();
-    }
+    // (Versão 20: saiu a limpeza do sw.js "desligador" do incidente de 01/11, apagado em 09/11.)
     await navigator.serviceWorker.register('service-worker.js');
     navigator.storage?.persist?.().catch(() => {}); // pede ao navegador para não apagar a cópia
   } catch { /* o app funciona só com internet */ }

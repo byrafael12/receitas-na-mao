@@ -251,13 +251,18 @@ input[type="checkbox"] { width: 24px; height: 24px; }
 
 /* Versão 19: timers */
 .timers-passo, .cozinha-timers { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cozinha-timers:empty { display: none; }
 .timer-botao { min-height: 44px; padding: 6px 12px; border: 1px solid var(--destaque); border-radius: 999px; background: var(--superficie); color: var(--texto); font: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
-.painel-timers { position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 30; max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
-.timer { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; background: var(--superficie); border: 1px solid var(--destaque); border-radius: var(--raio); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
+.painel-timers { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; padding: 2px; position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); z-index: 30; max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+.timer { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; background: var(--superficie); border: 1px solid var(--destaque); border-radius: var(--raio); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); }
 .timer-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.timer-relogio { font-weight: 700; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.timer-relogio { font-weight: 700; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.timer-linha { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.timer-passo { font-weight: 700; font-size: 0.9rem; color: var(--destaque); }
 .timer-rotulo { font-size: 0.8rem; color: var(--texto-suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.timer .botao.pequeno { padding: 6px 10px; min-width: 44px; }
+.timer.acabou .timer-passo { color: var(--destaque-texto); }
+.timer-botao.rodando { background: var(--destaque); color: var(--destaque-texto); font-variant-numeric: tabular-nums; }
+.timer .botao.pequeno { padding: 6px 8px; min-width: 44px; }
 .timer.acabou { background: var(--destaque); border-color: var(--destaque); }
 .timer.acabou .timer-relogio, .timer.acabou .timer-rotulo { color: var(--destaque-texto); }
 .timer.acabou .botao.principal { background: var(--superficie); color: var(--texto); border-color: var(--superficie); }
@@ -275,6 +280,17 @@ input[type="checkbox"] { width: 24px; height: 24px; }
 .cozinha-ing-grupo { color: var(--texto-suave); }
 .cozinha-navegacao { position: sticky; bottom: calc(var(--altura-timers, 0px) + 8px + env(safe-area-inset-bottom)); z-index: 5; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; padding: 8px 0; background: var(--fundo); }
 .cozinha-navegacao .botao { min-height: 60px; font-size: 1.1rem; }
+
+/* Versão 20: ordenar e filtrar por etiqueta */
+.controles-lista { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.controles-lista .alternar-visao { margin-bottom: 0; }
+.rotulo-ordem { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--texto-suave); }
+.seletor-ordem { width: auto; min-width: 9.5em; }
+.filtro-etiquetas { display: flex; gap: 6px; overflow-x: auto; padding: 2px 16px 10px; margin: 0 -16px; scrollbar-width: none; }
+.filtro-etiquetas::-webkit-scrollbar { display: none; }
+.etiqueta-filtro { flex: 0 0 auto; min-height: 44px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font: inherit; font-size: 0.9rem; cursor: pointer; white-space: nowrap; }
+.etiqueta-filtro.ativa { background: var(--destaque); border-color: var(--destaque); color: var(--destaque-texto); font-weight: 600; }
+.etiqueta-filtro.limpar { border-style: dashed; color: var(--texto-suave); }
 
 /* Impressão: só a receita, sem botões nem barras */
 @media print {
